@@ -43,6 +43,8 @@ ROUTE_TTL_SECONDS = int(os.getenv("ROUTE_TTL_SECONDS", "120"))
 ROUTE_PAYLOAD_TYPES = os.getenv("ROUTE_PAYLOAD_TYPES", "8,9,2,5,4")
 MESSAGE_ORIGIN_TTL_SECONDS = int(os.getenv("MESSAGE_ORIGIN_TTL_SECONDS", "300"))
 HEAT_TTL_SECONDS = int(os.getenv("HEAT_TTL_SECONDS", "600"))
+MQTT_ONLINE_SECONDS = int(os.getenv("MQTT_ONLINE_SECONDS", "300"))
+MQTT_SEEN_BROADCAST_MIN_SECONDS = float(os.getenv("MQTT_SEEN_BROADCAST_MIN_SECONDS", "5"))
 
 DEBUG_PAYLOAD = os.getenv("DEBUG_PAYLOAD", "false").lower() == "true"
 DEBUG_PAYLOAD_MAX = int(os.getenv("DEBUG_PAYLOAD_MAX", "400"))
@@ -111,6 +113,7 @@ stats = {
 }
 result_counts: Dict[str, int] = {}
 seen_devices: Dict[str, float] = {}  # device_id -> last_seen_ts
+last_seen_broadcast: Dict[str, float] = {}
 topic_counts: Dict[str, int] = {}    # topic -> count
 
 debug_last = deque(maxlen=DEBUG_LAST_MAX)
@@ -375,6 +378,8 @@ def _route_points_from_hashes(path_hashes: List[Any], receiver_id: Optional[str]
     state = devices.get(device_id)
     if not state:
       continue
+    if _coords_are_zero(state.lat, state.lon):
+      continue
     point = [state.lat, state.lon]
     if points and point == points[-1]:
       continue
@@ -385,6 +390,8 @@ def _route_points_from_hashes(path_hashes: List[Any], receiver_id: Optional[str]
     if points and receiver_id:
       receiver_state = devices.get(receiver_id)
       if receiver_state:
+        if _coords_are_zero(receiver_state.lat, receiver_state.lon):
+          return None, used_hashes
         receiver_point = [receiver_state.lat, receiver_state.lon]
         if receiver_point != points[0]:
           points.append(receiver_point)
@@ -400,6 +407,8 @@ def _route_points_from_device_ids(origin_id: Optional[str], receiver_id: Optiona
   origin_state = devices.get(origin_id)
   receiver_state = devices.get(receiver_id)
   if not origin_state or not receiver_state:
+    return None
+  if _coords_are_zero(origin_state.lat, origin_state.lon) or _coords_are_zero(receiver_state.lat, receiver_state.lon):
     return None
   points = [
     [origin_state.lat, origin_state.lon],
@@ -730,8 +739,18 @@ def _serialize_state() -> Dict[str, Any]:
   }
 
 
+def _device_payload(device_id: str, state: "DeviceState") -> Dict[str, Any]:
+  payload = asdict(state)
+  last_seen = seen_devices.get(device_id)
+  if last_seen:
+    payload["last_seen_ts"] = last_seen
+  else:
+    payload["last_seen_ts"] = payload.get("ts")
+  return payload
+
+
 def _load_state() -> None:
-  global devices, trails, seen_devices, node_hash_to_device, device_names, device_roles, device_role_sources
+  global devices, trails, seen_devices, node_hash_to_device, device_names, device_roles, device_role_sources, state_dirty
 
   try:
     if not os.path.exists(STATE_FILE):
@@ -744,31 +763,76 @@ def _load_state() -> None:
 
   raw_devices = data.get("devices") or {}
   loaded_devices: Dict[str, DeviceState] = {}
+  dropped_ids: Set[str] = set()
   for key, value in raw_devices.items():
     if not isinstance(value, dict):
       continue
     try:
-      loaded_devices[key] = DeviceState(**value)
+      state = DeviceState(**value)
     except Exception:
       continue
+    if _coords_are_zero(state.lat, state.lon):
+      dropped_ids.add(str(key))
+      continue
+    loaded_devices[key] = state
 
   devices = loaded_devices
   trails = data.get("trails") or {}
   seen_devices = data.get("seen_devices") or {}
+  cleaned_trails: Dict[str, list] = {}
+  trails_dirty = False
+  for device_id, trail in trails.items():
+    if not isinstance(trail, list):
+      continue
+    filtered: list = []
+    for entry in trail:
+      if not isinstance(entry, (list, tuple)) or len(entry) < 2:
+        continue
+      lat = entry[0]
+      lon = entry[1]
+      try:
+        lat_val = float(lat)
+        lon_val = float(lon)
+      except (TypeError, ValueError):
+        continue
+      if _coords_are_zero(lat_val, lon_val):
+        trails_dirty = True
+        continue
+      filtered.append(list(entry))
+    if filtered:
+      cleaned_trails[device_id] = filtered
+    else:
+      trails_dirty = True
+  trails = cleaned_trails
+  if dropped_ids:
+    for device_id in dropped_ids:
+      trails.pop(device_id, None)
+      seen_devices.pop(device_id, None)
+      trails_dirty = True
+  if trails_dirty:
+    state_dirty = True
   raw_names = data.get("device_names") or {}
   if isinstance(raw_names, dict):
     device_names = {str(k): str(v) for k, v in raw_names.items() if str(v).strip()}
   else:
     device_names = {}
+  if dropped_ids:
+    for device_id in dropped_ids:
+      device_names.pop(device_id, None)
   raw_role_sources = data.get("device_role_sources") or {}
   if isinstance(raw_role_sources, dict):
     device_role_sources = {str(k): str(v) for k, v in raw_role_sources.items() if str(v).strip()}
   else:
     device_role_sources = {}
+  if dropped_ids:
+    for device_id in dropped_ids:
+      device_role_sources.pop(device_id, None)
   raw_roles = data.get("device_roles") or {}
   device_roles = {}
   if isinstance(raw_roles, dict):
     for key, value in raw_roles.items():
+      if dropped_ids and str(key) in dropped_ids:
+        continue
       role_value = str(value).strip() if isinstance(value, str) else ""
       if not role_value:
         continue
@@ -780,6 +844,9 @@ def _load_state() -> None:
     for device_id in role_overrides:
       device_role_sources[device_id] = "override"
     device_roles.update(role_overrides)
+  if dropped_ids:
+    for device_id in dropped_ids:
+      device_roles.pop(device_id, None)
   node_hash_to_device = {}
   for device_id in devices.keys():
     node_hash = _node_hash_from_device_id(device_id)
@@ -1338,9 +1405,23 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
 
   dev_guess = _device_id_from_topic(msg.topic)
   if dev_guess:
-    seen_devices[dev_guess] = time.time()
+    now = time.time()
+    seen_devices[dev_guess] = now
+    if dev_guess in devices:
+      last_sent = last_seen_broadcast.get(dev_guess, 0)
+      if now - last_sent >= MQTT_SEEN_BROADCAST_MIN_SECONDS:
+        last_seen_broadcast[dev_guess] = now
+        loop: asyncio.AbstractEventLoop = userdata["loop"]
+        loop.call_soon_threadsafe(update_queue.put_nowait, {
+          "type": "device_seen",
+          "device_id": dev_guess,
+          "last_seen_ts": now,
+        })
 
   parsed, debug = _try_parse_payload(msg.topic, msg.payload)
+  if parsed and _coords_are_zero(parsed.get("lat", 0), parsed.get("lon", 0)):
+    debug["result"] = "filtered_zero_coords"
+    parsed = None
   origin_id = debug.get("origin_id") or _device_id_from_topic(msg.topic)
   decoder_meta = debug.get("decoder_meta") or {}
   result = debug.get("result") or "unknown"
@@ -1529,7 +1610,28 @@ async def broadcaster():
           state.name = device_names[device_id]
         if device_id in device_roles:
           state.role = device_roles[device_id]
-        payload = {"type": "update", "device": asdict(state), "trail": trails.get(device_id, [])}
+        payload = {"type": "update", "device": _device_payload(device_id, state), "trail": trails.get(device_id, [])}
+        dead = []
+        for ws in list(clients):
+          try:
+            await ws.send_text(json.dumps(payload))
+          except Exception:
+            dead.append(ws)
+        for ws in dead:
+          clients.discard(ws)
+      continue
+
+    if isinstance(event, dict) and event.get("type") == "device_seen":
+      device_id = event.get("device_id")
+      state = devices.get(device_id)
+      if state:
+        seen_ts = event.get("last_seen_ts") or time.time()
+        seen_devices[device_id] = seen_ts
+        payload = {
+          "type": "device_seen",
+          "device_id": device_id,
+          "last_seen_ts": seen_ts,
+        }
         dead = []
         for ws in list(clients):
           try:
@@ -1618,12 +1720,13 @@ async def broadcaster():
     if state.role:
       device_roles[device_id] = state.role
 
-    trails.setdefault(device_id, [])
-    trails[device_id].append([state.lat, state.lon, state.ts])
-    if len(trails[device_id]) > TRAIL_LEN:
-      trails[device_id] = trails[device_id][-TRAIL_LEN:]
+    if not _coords_are_zero(state.lat, state.lon):
+      trails.setdefault(device_id, [])
+      trails[device_id].append([state.lat, state.lon, state.ts])
+      if len(trails[device_id]) > TRAIL_LEN:
+        trails[device_id] = trails[device_id][-TRAIL_LEN:]
 
-    payload = {"type": "update", "device": asdict(state), "trail": trails[device_id]}
+    payload = {"type": "update", "device": _device_payload(device_id, state), "trail": trails.get(device_id, [])}
 
     dead = []
     for ws in list(clients):
@@ -1657,6 +1760,27 @@ async def reaper():
           devices.pop(dev_id, None)
           trails.pop(dev_id, None)
           state_dirty = True
+
+    if routes:
+      bad_routes = []
+      for route_id, route in list(routes.items()):
+        points = route.get("points") if isinstance(route, dict) else None
+        if not isinstance(points, list):
+          continue
+        if any(_coords_are_zero(p[0], p[1]) for p in points if isinstance(p, list) and len(p) >= 2):
+          bad_routes.append(route_id)
+      if bad_routes:
+        payload = {"type": "route_remove", "route_ids": bad_routes}
+        dead = []
+        for ws in list(clients):
+          try:
+            await ws.send_text(json.dumps(payload))
+          except Exception:
+            dead.append(ws)
+        for ws in dead:
+          clients.discard(ws)
+        for route_id in bad_routes:
+          routes.pop(route_id, None)
 
     stale_routes = [route_id for route_id, route in list(routes.items()) if now > route.get("expires_at", 0)]
     if stale_routes:
@@ -1725,6 +1849,7 @@ def root():
     "LOS_SAMPLE_MAX": LOS_SAMPLE_MAX,
     "LOS_SAMPLE_STEP_METERS": LOS_SAMPLE_STEP_METERS,
     "LOS_PEAKS_MAX": LOS_PEAKS_MAX,
+    "MQTT_ONLINE_SECONDS": MQTT_ONLINE_SECONDS,
   }
   for key, value in replacements.items():
     safe_value = html.escape(str(value), quote=True)
@@ -1736,7 +1861,7 @@ def root():
 @app.get("/snapshot")
 def snapshot():
   return {
-    "devices": {k: asdict(v) for k, v in devices.items()},
+    "devices": {k: _device_payload(k, v) for k, v in devices.items()},
     "trails": trails,
     "routes": list(routes.values()),
     "heat": _serialize_heat_events(),
@@ -1772,7 +1897,8 @@ def get_stats():
 
 
 @app.get("/los")
-def line_of_sight(lat1: float, lon1: float, lat2: float, lon2: float):
+def line_of_sight(lat1: float, lon1: float, lat2: float, lon2: float, profile: bool = False):
+  include_points = bool(profile)
   start = _normalize_lat_lon(lat1, lon1)
   end = _normalize_lat_lon(lat2, lon2)
   if not start or not end:
@@ -1793,18 +1919,18 @@ def line_of_sight(lat1: float, lon1: float, lat2: float, lon2: float):
   max_terrain = max(elevations)
   blocked = max_obstruction > 0.0
   suggestion = _find_los_suggestion(points, elevations) if blocked else None
-  profile = []
+  profile_samples = []
   if distance_m > 0:
     for (lat, lon, t), elev in zip(points, elevations):
       line_elev = start_elev + (end_elev - start_elev) * t
-      profile.append([
+      profile_samples.append([
         round(distance_m * t, 2),
         round(float(elev), 2),
         round(float(line_elev), 2),
       ])
   peaks = _find_los_peaks(points, elevations, distance_m)
 
-  return {
+  response = {
     "ok": True,
     "blocked": blocked,
     "max_obstruction_m": round(max_obstruction, 2),
@@ -1820,9 +1946,15 @@ def line_of_sight(lat1: float, lon1: float, lat2: float, lon2: float):
     "provider": LOS_ELEVATION_URL,
     "note": "Straight-line LOS using SRTM90m. No curvature/refraction.",
     "suggested": suggestion,
-    "profile": profile,
+    "profile": profile_samples,
     "peaks": peaks,
   }
+  if include_points:
+    response["profile_points"] = [
+      [round(lat, 6), round(lon, 6), round(t, 4), round(float(elev), 2)]
+      for (lat, lon, t), elev in zip(points, elevations)
+    ]
+  return response
 
 
 @app.get("/debug/last")
@@ -1850,7 +1982,7 @@ async def ws_endpoint(ws: WebSocket):
 
   await ws.send_text(json.dumps({
     "type": "snapshot",
-    "devices": {k: asdict(v) for k, v in devices.items()},
+    "devices": {k: _device_payload(k, v) for k, v in devices.items()},
     "trails": trails,
     "routes": list(routes.values()),
     "heat": _serialize_heat_events(),

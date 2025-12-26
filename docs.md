@@ -27,12 +27,17 @@ This project renders live MeshCore traffic on a Leaflet + OpenStreetMap map. A F
 ## Frontend UI
 - Header includes a GitHub link icon and HUD summary (stats, feed note).
 - Base map toggle: Light/Dark/Topo; persisted to localStorage.
+- Dark map also darkens node popups for readability.
 - Legend is collapsible and persisted to localStorage.
+- HUD is capped to `90vh` and scrolls to avoid running off-screen.
 - Map start position is configurable with `MAP_START_LAT`, `MAP_START_LON`, `MAP_START_ZOOM`.
 - Node search (name or key) and a labels toggle (persisted to localStorage).
+- Hide Nodes toggle hides markers and trails; routes remain visible.
+- Propagation overlay keeps heat/routes/trails/markers above it after render.
+- MQTT online status shows as a green marker outline and popup status; legend includes the online window.
 
 ## LOS (Line of Sight) Tool
-- Client-side LOS fetches terrain from OpenTopodata SRTM90m; if CORS fails it falls back to `/los`.
+- LOS runs **server-side only** via `/los` (no client-side elevation fetch).
 - UI draws an LOS line (green clear / red blocked), renders an elevation profile, and marks peaks.
 - Peak markers show coords + elevation and copy coords on click.
 - Hovering the profile or the LOS line syncs a cursor tooltip on the profile.
@@ -56,6 +61,7 @@ Routes are drawn when:
 If routes aren’t visible:
 - The packet may only include a single hop (`path: ["24"]`).
 - Other repeaters might not be publishing to MQTT, so the message is only seen by one observer.
+- Routes and trails drop any `0,0` coordinates and will purge bad entries on load.
 
 ## Frontend Map UI
 - Legend includes Trace/Message/Advert line styles and Repeater/Companion/Room/Unknown dot colors.
@@ -68,6 +74,7 @@ If routes aren’t visible:
 - Devices, trails, names, roles, and routes are saved to `data/state.json`.
 - On restart, devices should stay visible if `state.json` exists.
 - If stale/mis-labeled roles appear, delete `data/state.json` or remove role entries.
+- State load now removes any `0,0` coordinates from devices/trails.
 
 ## Troubleshooting Notes
 - If map is empty but MQTT is connected, check `/debug/last` for decoded payloads and `payloadType`.
@@ -85,3 +92,6 @@ If routes aren’t visible:
 - UI: route legend, role legend, and improved marker styles.
 - Roles now apply to advertised pubkey, not receiver.
 - Docker restarts are required after file changes (always run `docker compose up -d --build`).
+- LOS is server-side only; elevation profile/peaks are returned by `/los`.
+- MQTT online indicator (green outline + legend) and configurable online window.
+- Filters out `0,0` GPS points from devices, trails, and routes.
