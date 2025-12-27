@@ -1557,6 +1557,7 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
     if route_type in (0, 1):
       route_hashes = path_header
 
+  route_emitted = False
   if route_hashes and payload_type in ROUTE_PAYLOAD_TYPES_SET:
     loop.call_soon_threadsafe(update_queue.put_nowait, {
       "type": "route",
@@ -1570,6 +1571,7 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
       "ts": time.time(),
       "topic": msg.topic,
     })
+    route_emitted = True
   elif message_hash and route_origin_id and receiver_id:
     if direction_value == "rx" and msg.topic.endswith("/packets"):
       loop.call_soon_threadsafe(update_queue.put_nowait, {
@@ -1584,6 +1586,24 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
         "ts": time.time(),
         "topic": msg.topic,
       })
+      route_emitted = True
+
+  if (not route_emitted and direction_value == "rx" and msg.topic.endswith("/packets")
+      and receiver_id and route_origin_id and receiver_id != route_origin_id
+      and payload_type in ROUTE_PAYLOAD_TYPES_SET):
+    fallback_id = message_hash or f"{route_origin_id}-{receiver_id}-{int(time.time() * 1000)}"
+    loop.call_soon_threadsafe(update_queue.put_nowait, {
+      "type": "route",
+      "route_mode": "direct",
+      "route_id": f"direct-{fallback_id}",
+      "origin_id": route_origin_id,
+      "receiver_id": receiver_id,
+      "message_hash": message_hash,
+      "route_type": route_type,
+      "payload_type": payload_type,
+      "ts": time.time(),
+      "topic": msg.topic,
+    })
 
   if not parsed:
     stats["unparsed_total"] += 1

@@ -87,6 +87,7 @@ Runtime tuning:
 - Line-of-sight tool: click **LOS tool** and pick two points, or **Shift+click** two nodes to measure LOS between them.
 - LOS runs server-side via `/los` (no client-side elevation fetch).
 - Dark map also darkens node popups for readability.
+- Route styling uses payload type: 2/5 = Message (blue), 8/9 = Trace (orange), 4 = Advert (green).
 
 ## License
 [GPL-3.0](https://github.com/yellowcooln/meshcore-mqtt-live-map?tab=License-1-ov-file#).

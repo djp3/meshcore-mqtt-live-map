@@ -2403,15 +2403,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       const isFanout = routeMode === 'fanout';
       const payloadType = Number(r.payload_type);
       const isAdvert = payloadType === 4;
+      const isTrace = payloadType === 8 || payloadType === 9;
+      const isMessage = payloadType === 2 || payloadType === 5;
       const style = {
-        color: isAdvert ? '#2ecc71' : (isFanout ? '#2b8cff' : '#ff7a1a'),
+        color: isAdvert
+          ? '#2ecc71'
+          : (isTrace ? '#ff7a1a' : (isMessage ? '#2b8cff' : (isFanout ? '#2b8cff' : '#ff7a1a'))),
         weight: isFanout ? 4 : 5,
         opacity: isFanout ? 0.85 : 0.9,
         lineCap: 'butt',
         lineJoin: 'miter'
       };
-      if (!isFanout) {
-        style.dashArray = isAdvert ? '4 10' : '8 14';
+      if (isAdvert) {
+        style.dashArray = '2 10';
+      } else if (isMessage) {
+        style.dashArray = '6 12';
+      } else if (isTrace) {
+        style.dashArray = '8 14';
+      } else if (!isFanout) {
+        style.dashArray = '8 14';
       }
 
       let entry = routeLines.get(id);

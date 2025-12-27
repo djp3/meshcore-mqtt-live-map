@@ -64,6 +64,7 @@ If routes aren’t visible:
 - The packet may only include a single hop (`path: ["24"]`).
 - Other repeaters might not be publishing to MQTT, so the message is only seen by one observer.
 - Routes and trails drop any `0,0` coordinates and will purge bad entries on load.
+- Route styling uses payload type: 2/5 = Message (blue), 8/9 = Trace (orange), 4 = Advert (green).
 
 ## Frontend Map UI
 - Legend includes Trace/Message/Advert line styles and Repeater/Companion/Room/Unknown dot colors.
