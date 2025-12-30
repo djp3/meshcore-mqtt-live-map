@@ -138,4 +138,4 @@ Use it:
 
 ---
 
-This project was entirely vibe coded with Codex so always expect issues and bugs.
+This project was vibe-coded with Codex—please expect rough edges and the occasional bug.
