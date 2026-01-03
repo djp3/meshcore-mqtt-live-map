@@ -93,8 +93,13 @@ def _normalize_lat_lon(lat: Any, lon: Any) -> Optional[Tuple[float, float]]:
   return None
 
 
-def _coords_are_zero(lat: float, lon: float) -> bool:
-  return abs(lat) < 1e-6 and abs(lon) < 1e-6
+def _coords_are_zero(lat: Any, lon: Any) -> bool:
+  try:
+    lat_val = float(lat)
+    lon_val = float(lon)
+  except (TypeError, ValueError):
+    return False
+  return abs(lat_val) < 1e-6 and abs(lon_val) < 1e-6
 
 
 def _find_lat_lon_in_json(obj: Any) -> Optional[Tuple[float, float]]:
