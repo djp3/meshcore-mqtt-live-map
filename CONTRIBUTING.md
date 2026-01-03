@@ -1,0 +1,38 @@
+# Contributing Guide
+
+Thanks for helping improve the MeshCore Live Map. This repo is intentionally lightweight (no build step), so keep changes simple and readable.
+
+## Quick Start
+1) Copy `.env.example` to `.env` and set MQTT details.
+2) Rebuild: `docker compose up -d --build`
+3) Verify: `curl -s http://localhost:8080/snapshot`
+
+## Project Layout
+- `backend/app.py` handles MQTT ingest, decoding, routing, and API endpoints.
+- `backend/static/index.html` is the HTML shell + template placeholders.
+- `backend/static/styles.css` holds all UI styling.
+- `backend/static/app.js` contains all client-side map logic (Leaflet, routes, LOS, propagation).
+- `backend/static/sw.js` is the PWA service worker.
+
+## Coding Style
+- Use 2-space indentation everywhere (Python, HTML, CSS, JS).
+- Keep helpers small and focused; prefer new helpers over huge functions.
+- Avoid new dependencies unless they’re critical.
+
+## Testing Checklist
+- `docker compose up -d --build` after any change.
+- `curl -s http://localhost:8080/stats` to confirm MQTT ingest.
+- Open the map: confirm markers, LOS, and propagation behave as expected.
+
+## UI Changes
+When adding UI controls:
+- Wire the toggle into `app.js`.
+- Add styles to `styles.css` (don’t inline).
+- Keep HUD layout stable on mobile (test at narrow widths).
+
+## API Changes
+- Document new endpoints in `docs.md`.
+- Keep payloads backward-compatible when possible.
+
+## Commits
+Use short, imperative commit messages, e.g. `Add LOS panel toggle`.

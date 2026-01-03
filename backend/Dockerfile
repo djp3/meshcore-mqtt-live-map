@@ -12,7 +12,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN npm install --prefix /app @michaelhart/meshcore-decoder \
   && npm cache clean --force
 
-COPY app.py /app/app.py
+COPY *.py /app/
 COPY static /app/static
 
 EXPOSE 8080

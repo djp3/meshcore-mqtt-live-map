@@ -22,8 +22,16 @@ Live example: https://live.bostonme.sh/
 - Click the logo to hide/show the left HUD panel while tools stay open
 
 ## Project Structure
-- `backend/app.py`: FastAPI server, MQTT ingest, MeshCore decoding, persistence
-- `backend/static/index.html`: Leaflet UI, map rendering, route/heat display
+- `backend/app.py`: FastAPI server wiring, MQTT lifecycle, WS broadcast
+- `backend/config.py`: environment configuration
+- `backend/state.py`: shared in-memory state + dataclasses
+- `backend/decoder.py`: payload parsing + meshcore-decoder integration
+- `backend/los.py`: LOS math + elevation helpers
+- `backend/history.py`: route history persistence + pruning
+- `backend/static/index.html`: HTML shell + template placeholders
+- `backend/static/styles.css`: UI styles
+- `backend/static/app.js`: map logic + UI controls
+- `backend/static/sw.js`: PWA service worker
 - `docker-compose.yaml`: runtime configuration (reads from `.env`)
 - `data/`: runtime state (created at first run)
 
@@ -138,7 +146,7 @@ Use it:
 - LOS runs server-side via `/los` (no client-side elevation fetch).
 - Dark map also darkens node popups for readability.
 - Route styling uses payload type: 2/5 = Message (blue), 8/9 = Trace (orange), 4 = Advert (green).
-- If hop hashes collide, the backend chooses the device closest in time to the packet timestamp (heuristic).
+- If hop hashes collide, the backend skips those hashes (unique-only mapping).
 
 ## API
 The backend exposes a nodes API for external tools (e.g. MeshBuddy):
