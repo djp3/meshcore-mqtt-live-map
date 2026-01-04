@@ -44,7 +44,7 @@ This project renders live MeshCore traffic on a Leaflet + OpenStreetMap map. A F
 - Default base layer can be set with `MAP_DEFAULT_LAYER` (localStorage overrides).
 - Units toggle (km/mi) is site-wide; default from `DISTANCE_UNITS` and stored in localStorage.
 - Node search (name or key) and a labels toggle (persisted to localStorage).
-- History tool defaults off and opens a right-side panel with a heat filter slider.
+- History tool defaults off and opens a right-side panel with a heat filter slider (visibility is not persisted).
 - History slider modes: 0 = All, 1 = Blue only, 2 = Yellow only, 3 = Yellow + Red, 4 = Red only.
 - History legend swatch is hidden unless the History tool is active.
 - Trail text in the HUD is only shown when `TRAIL_LEN > 0`; `TRAIL_LEN=0` disables trails entirely.
@@ -57,6 +57,8 @@ This project renders live MeshCore traffic on a Leaflet + OpenStreetMap map. A F
 - MQTT online status shows as a green marker outline and popup status; it uses `mqtt_seen_ts` from `/status` or `/packets` topics (configurable).
 - PWA install support is enabled via `/manifest.webmanifest` and a service worker at `/sw.js`.
 - Clicking the HUD logo hides/shows the left panel while tool panels stay open.
+- Share button copies a URL with the current view + toggles.
+- URL params override stored settings: `lat`, `lon`/`lng`/`long`, `zoom`, `layer`, `history`, `heat`, `labels`, `nodes`, `legend`, `units`, `history_filter`.
 - Service worker uses `no-store` for navigation requests so env-driven UI toggles (like the radius ring) update without clearing site data.
 
 ## LOS (Line of Sight) Tool
@@ -140,3 +142,4 @@ If routes aren’t visible:
 - Trails can be disabled by setting `TRAIL_LEN=0` (HUD trail text is removed).
 - Units toggle defaults from `DISTANCE_UNITS` and persists in localStorage.
 - Mobile LOS selection supports long-press on nodes.
+- History tool visibility no longer persists (always off unless `history=on` in the URL).

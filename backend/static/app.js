@@ -1,12 +1,67 @@
     window.__meshmapStarted = true;
     const config = document.body ? document.body.dataset : {};
-    const mapStartLat = parseFloat(config.mapStartLat) || 42.3601;
-    const mapStartLon = parseFloat(config.mapStartLon) || -71.1500;
-    const mapStartZoom = Number(config.mapStartZoom) || 10;
+    const queryParams = new URLSearchParams(window.location.search);
+    const parseNumberParam = (value) => {
+      if (value == null) return null;
+      const str = String(value).trim();
+      if (!str) return null;
+      const num = Number(str);
+      return Number.isFinite(num) ? num : null;
+    };
+    const parseBoolParam = (value) => {
+      if (value == null) return null;
+      const str = String(value).trim().toLowerCase();
+      if (!str) return null;
+      if (['1', 'true', 'yes', 'on'].includes(str)) return true;
+      if (['0', 'false', 'no', 'off'].includes(str)) return false;
+      if (!Number.isNaN(Number(str))) return Number(str) > 0;
+      return null;
+    };
+    const parseHistoryFilterParam = (value) => {
+      if (value == null) return null;
+      const str = String(value).trim().toLowerCase();
+      if (!str) return null;
+      if (str === 'all' || str === '0') return 0;
+      if (str === 'blue' || str === '1') return 1;
+      if (str === 'yellow' || str === '2') return 2;
+      if (str === 'yellowred' || str === 'yellow+red' || str === 'yellow-red' || str === '3') return 3;
+      if (str === 'red' || str === '4') return 4;
+      return null;
+    };
+    const queryLat = parseNumberParam(queryParams.get('lat') ?? queryParams.get('latitude'));
+    const queryLon = parseNumberParam(queryParams.get('lon') ?? queryParams.get('lng') ?? queryParams.get('long') ?? queryParams.get('longitude'));
+    const queryZoom = parseNumberParam(queryParams.get('zoom'));
+    const queryLayer = String(queryParams.get('layer') || queryParams.get('map') || '').toLowerCase();
+    const queryHistoryVisible = parseBoolParam(queryParams.get('history'));
+    const queryHeatVisible = parseBoolParam(queryParams.get('heat'));
+    const queryLabelsVisible = parseBoolParam(queryParams.get('labels'));
+    const queryNodesVisible = parseBoolParam(queryParams.get('nodes'));
+    const queryLegendVisible = parseBoolParam(queryParams.get('legend'));
+    const queryUnits = String(queryParams.get('units') || queryParams.get('unit') || '').toLowerCase();
+    const queryHistoryFilter = parseHistoryFilterParam(
+      queryParams.get('history_filter') || queryParams.get('historyFilter') || queryParams.get('historyfilter')
+    );
+    const reportError = typeof window.__meshmapReportError === 'function'
+      ? window.__meshmapReportError
+      : (message) => console.warn(message);
+
+    const envStartLat = parseFloat(config.mapStartLat);
+    const envStartLon = parseFloat(config.mapStartLon);
+    const envStartZoom = Number(config.mapStartZoom);
+    const defaultLat = Number.isFinite(envStartLat) ? envStartLat : 42.3601;
+    const defaultLon = Number.isFinite(envStartLon) ? envStartLon : -71.1500;
+    const defaultZoom = Number.isFinite(envStartZoom) && envStartZoom > 0 ? envStartZoom : 10;
+    const mapStartLat = Number.isFinite(queryLat) ? queryLat : defaultLat;
+    const mapStartLon = Number.isFinite(queryLon) ? queryLon : defaultLon;
+    const mapStartZoom = Number.isFinite(queryZoom) && queryZoom > 0 ? queryZoom : defaultZoom;
     const mapRadiusKm = Number(config.mapRadiusKm) || 0;
     const mapRadiusShow = String(config.mapRadiusShow).toLowerCase() === 'true';
     let baseLayer = (config.mapDefaultLayer || 'light').toLowerCase();
-    if (baseLayer !== 'dark' && baseLayer !== 'topo' && baseLayer !== 'light') {
+    const validLayers = new Set(['dark', 'topo', 'light']);
+    if (validLayers.has(queryLayer)) {
+      baseLayer = queryLayer;
+    }
+    if (!validLayers.has(baseLayer)) {
       baseLayer = 'light';
     }
 
@@ -37,7 +92,7 @@
       }).addTo(map);
     }
     const storedLayer = localStorage.getItem('meshmapBaseLayer');
-    if (storedLayer === 'dark' || storedLayer === 'topo' || storedLayer === 'light') {
+    if (!validLayers.has(queryLayer) && (storedLayer === 'dark' || storedLayer === 'topo' || storedLayer === 'light')) {
       baseLayer = storedLayer;
     }
 
@@ -69,13 +124,14 @@
     const losPeaksMax = Number(config.losPeaksMax) || 4;
     const mqttOnlineSeconds = Number(config.mqttOnlineSeconds) || 300;
     const defaultDistanceUnits = config.distanceUnits || 'km';
-    const heatLayer = L.heatLayer([], {
+    const heatAvailable = typeof L.heatLayer === 'function';
+    const heatLayer = heatAvailable ? L.heatLayer([], {
       radius: 28,
       blur: 22,
       minOpacity: 0.2,
       maxZoom: 16,
       gradient: { 0.2: '#fbbf24', 0.5: '#f97316', 0.8: '#ef4444', 1.0: '#b91c1c' }
-    });
+    }) : null;
     const heatPoints = [];
     const HEAT_TTL_MS = 10 * 60 * 1000;
     const losLayer = L.layerGroup().addTo(map);
@@ -116,22 +172,22 @@
       distanceUnits = 'km';
       localStorage.setItem('meshmapDistanceUnits', distanceUnits);
     }
+    if (validUnits.has(queryUnits)) {
+      distanceUnits = queryUnits;
+      localStorage.setItem('meshmapDistanceUnits', distanceUnits);
+    }
     const historyLabel = document.getElementById('history-window-label');
     const historyFilter = document.getElementById('history-filter');
     const historyFilterLabel = document.getElementById('history-filter-label');
     let historyWindowSeconds = null;
     const historyToolVersion = '1';
-    const storedHistoryToolVersion = localStorage.getItem('meshmapHistoryToolVersion');
-    if (storedHistoryToolVersion !== historyToolVersion) {
-      localStorage.setItem('meshmapShowHistory', 'false');
-      localStorage.setItem('meshmapHistoryToolVersion', historyToolVersion);
-    }
-    const storedHistory = localStorage.getItem('meshmapShowHistory');
-    let historyVisible = storedHistory === 'true';
-    if (storedHistory === null) {
-      localStorage.setItem('meshmapShowHistory', 'false');
-    }
+    localStorage.setItem('meshmapHistoryToolVersion', historyToolVersion);
+    let historyVisible = false;
     let historyFilterMode = Number(localStorage.getItem('meshmapHistoryFilter') || '0');
+    if (queryHistoryFilter != null) {
+      historyFilterMode = queryHistoryFilter;
+      localStorage.setItem('meshmapHistoryFilter', String(historyFilterMode));
+    }
     if (![0, 1, 2, 3, 4].includes(historyFilterMode)) {
       historyFilterMode = 0;
       localStorage.setItem('meshmapHistoryFilter', '0');
@@ -256,7 +312,7 @@
           historyLayer.addTo(map);
           renderHistoryFromCache();
         }
-        if (heatVisible && !map.hasLayer(heatLayer)) {
+        if (heatVisible && heatLayer && !map.hasLayer(heatLayer)) {
           heatLayer.addTo(map);
         }
       } else if (map.hasLayer(markerLayer)) {
@@ -271,7 +327,7 @@
           map.removeLayer(historyLayer);
           clearHistoryLayer();
         }
-        if (map.hasLayer(heatLayer)) {
+        if (heatLayer && map.hasLayer(heatLayer)) {
           map.removeLayer(heatLayer);
         }
       } else if (map.hasLayer(trailLayer)) {
@@ -284,7 +340,7 @@
           map.removeLayer(historyLayer);
           clearHistoryLayer();
         }
-        if (map.hasLayer(heatLayer)) {
+        if (heatLayer && map.hasLayer(heatLayer)) {
           map.removeLayer(heatLayer);
         }
       }
@@ -326,21 +382,30 @@
     function setHeatVisible(visible) {
       heatVisible = visible;
       const btn = document.getElementById('heat-toggle');
+      if (!heatAvailable) {
+        heatVisible = false;
+        if (btn) {
+          btn.disabled = true;
+          btn.classList.add('disabled');
+          btn.textContent = 'Heat unavailable';
+        }
+        return;
+      }
       if (btn) {
         btn.classList.toggle('active', !visible);
         btn.textContent = visible ? 'Hide heat' : 'Show heat';
       }
       if (!nodesVisible) {
-        if (map.hasLayer(heatLayer)) {
+        if (heatLayer && map.hasLayer(heatLayer)) {
           map.removeLayer(heatLayer);
         }
         return;
       }
       if (visible) {
-        if (!map.hasLayer(heatLayer)) {
+        if (heatLayer && !map.hasLayer(heatLayer)) {
           heatLayer.addTo(map);
         }
-      } else if (map.hasLayer(heatLayer)) {
+      } else if (heatLayer && map.hasLayer(heatLayer)) {
         map.removeLayer(heatLayer);
       }
     }
@@ -2662,15 +2727,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     function refreshHeatLayer() {
+      if (!heatLayer) return;
       const now = Date.now();
       const cutoff = now - HEAT_TTL_MS;
       const filtered = heatPoints.filter(p => p.ts >= cutoff);
       heatPoints.length = 0;
       heatPoints.push(...filtered);
+      if (!heatVisible || !map.hasLayer(heatLayer)) {
+        return;
+      }
       heatLayer.setLatLngs(heatPoints.map(p => [p.lat, p.lon, p.weight]));
     }
 
     function addHeatPoints(points, tsSeconds, payloadType) {
+      if (!heatLayer) return;
       if (!Array.isArray(points) || points.length < 1) return;
       const ts = (tsSeconds ? tsSeconds * 1000 : Date.now());
       points.forEach(p => {
@@ -2680,6 +2750,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
 
     function seedHeat(items) {
+      if (!heatLayer) return;
       if (!Array.isArray(items)) return;
       heatPoints.length = 0;
       items.forEach(item => {
@@ -2917,7 +2988,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if (legendToggle && hud) {
       const storedLegend = localStorage.getItem('meshmapLegendCollapsed');
-      if (storedLegend === 'true') {
+      const overrideLegend = queryLegendVisible === null ? null : !queryLegendVisible;
+      const initialLegendCollapsed = overrideLegend !== null ? overrideLegend : storedLegend === 'true';
+      if (initialLegendCollapsed) {
         hud.classList.add('legend-collapsed');
         legendToggle.textContent = 'Show legend';
       }
@@ -2925,6 +2998,50 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         const collapsed = hud.classList.toggle('legend-collapsed');
         legendToggle.textContent = collapsed ? 'Show legend' : 'Hide legend';
         localStorage.setItem('meshmapLegendCollapsed', collapsed ? 'true' : 'false');
+      });
+      if (overrideLegend !== null) {
+        localStorage.setItem('meshmapLegendCollapsed', overrideLegend ? 'true' : 'false');
+      }
+    }
+
+    const shareToggle = document.getElementById('share-toggle');
+    if (shareToggle) {
+      const resetShareButton = () => {
+        shareToggle.classList.remove('copied');
+        shareToggle.setAttribute('aria-label', 'Copy share link');
+        shareToggle.setAttribute('title', 'Copy share link');
+      };
+      shareToggle.addEventListener('click', async () => {
+        const center = map.getCenter();
+        const url = new URL(window.location.href);
+        url.searchParams.set('lat', center.lat.toFixed(5));
+        url.searchParams.set('lon', center.lng.toFixed(5));
+        url.searchParams.set('zoom', String(map.getZoom()));
+        url.searchParams.set('layer', baseLayer);
+        url.searchParams.set('history', historyVisible ? 'on' : 'off');
+        url.searchParams.set('heat', heatVisible ? 'on' : 'off');
+        url.searchParams.set('labels', showLabels ? 'on' : 'off');
+        url.searchParams.set('nodes', nodesVisible ? 'on' : 'off');
+        url.searchParams.set('legend', hud && hud.classList.contains('legend-collapsed') ? 'off' : 'on');
+        url.searchParams.set('units', distanceUnits);
+        url.searchParams.set('history_filter', String(historyFilterMode));
+        const shareUrl = url.toString();
+        let copied = false;
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(shareUrl);
+            copied = true;
+          }
+        } catch (err) {
+          copied = false;
+        }
+        if (!copied) {
+          window.prompt('Copy share link:', shareUrl);
+        }
+        shareToggle.classList.add('copied');
+        shareToggle.setAttribute('aria-label', 'Share link copied');
+        shareToggle.setAttribute('title', 'Share link copied');
+        window.setTimeout(resetShareButton, 1600);
       });
     }
 
@@ -3000,6 +3117,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       labelsToggle.addEventListener('click', () => {
         setLabelsActive(!showLabels);
       });
+    }
+    if (queryLabelsVisible !== null) {
+      showLabels = queryLabelsVisible;
+      localStorage.setItem('meshmapShowLabels', showLabels ? 'true' : 'false');
     }
     setLabelsActive(showLabels);
 
@@ -3089,11 +3210,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     const nodesToggle = document.getElementById('nodes-toggle');
     if (nodesToggle) {
       const storedNodes = localStorage.getItem('meshmapNodesVisible');
-      if (storedNodes !== null) {
-        setNodesVisible(storedNodes === 'true');
-      } else {
-        setNodesVisible(true);
+      let initialNodes = storedNodes !== null ? storedNodes === 'true' : true;
+      if (queryNodesVisible !== null) {
+        initialNodes = queryNodesVisible;
+        localStorage.setItem('meshmapNodesVisible', initialNodes ? 'true' : 'false');
       }
+      setNodesVisible(initialNodes);
       nodesToggle.addEventListener('click', () => {
         setNodesVisible(!nodesVisible);
         localStorage.setItem('meshmapNodesVisible', nodesVisible ? 'true' : 'false');
@@ -3102,15 +3224,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     const historyToggle = document.getElementById('history-toggle');
     if (historyToggle) {
-      const storedHistoryVisible = localStorage.getItem('meshmapShowHistory');
-      if (storedHistoryVisible !== null) {
-        setHistoryVisible(storedHistoryVisible === 'true');
-      } else {
-        setHistoryVisible(false);
+      let initialHistory = false;
+      if (queryHistoryVisible !== null) {
+        initialHistory = queryHistoryVisible;
       }
+      setHistoryVisible(initialHistory);
       historyToggle.addEventListener('click', () => {
         setHistoryVisible(!historyVisible);
-        localStorage.setItem('meshmapShowHistory', historyVisible ? 'true' : 'false');
       });
     }
     updateHistoryFilterLabel();
@@ -3123,14 +3243,20 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     const heatToggle = document.getElementById('heat-toggle');
     if (heatToggle) {
       const storedHeatVisible = localStorage.getItem('meshmapShowHeat');
-      if (storedHeatVisible !== null) {
-        setHeatVisible(storedHeatVisible === 'true');
-      } else {
-        setHeatVisible(true);
+      let initialHeat = storedHeatVisible !== null ? storedHeatVisible === 'true' : true;
+      if (queryHeatVisible !== null) {
+        initialHeat = queryHeatVisible;
+        localStorage.setItem('meshmapShowHeat', initialHeat ? 'true' : 'false');
       }
+      setHeatVisible(initialHeat);
       heatToggle.addEventListener('click', () => {
-        setHeatVisible(!heatVisible);
-        localStorage.setItem('meshmapShowHeat', heatVisible ? 'true' : 'false');
+        try {
+          setHeatVisible(!heatVisible);
+          localStorage.setItem('meshmapShowHeat', heatVisible ? 'true' : 'false');
+        } catch (err) {
+          reportError(`Heat toggle failed: ${err && err.message ? err.message : err}`);
+          console.error(err);
+        }
       });
     }
 

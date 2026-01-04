@@ -19,6 +19,8 @@ Live example sites:
 - Persistent device state and optional trails (disable with `TRAIL_LEN=0`)
 - 24-hour route history tool with volume-based coloring, click-to-view packet details, and a heat-band slider (All, Blue, Yellow, Yellow+Red, Red)
 - UI controls: legend toggle, dark map, topo map, units toggle (km/mi), labels toggle, hide nodes, heat toggle
+- Share button that copies a URL with current view + settings
+- URL parameters to open the map at a specific view (center, zoom, toggles)
 - Node search by name or public key
 - LOS tool with elevation profile + peak markers and hover sync (Shift+click or long‑press nodes)
 - Embeddable metadata (Open Graph/Twitter tags) driven by env vars
@@ -151,6 +153,8 @@ Use it:
 - Line-of-sight tool: click **LOS tool** and pick two points, or **Shift+click** two nodes to measure LOS between them.
 - On mobile, long‑press a node to select it for LOS.
 - LOS runs server-side via `/los` (no client-side elevation fetch).
+- History tool always loads off (use the button or `history=on` in the URL).
+- URL params override stored settings: `lat`, `lon`/`lng`/`long`, `zoom`, `layer`, `history`, `heat`, `labels`, `nodes`, `legend`, `units`, `history_filter`.
 - Dark map also darkens node popups for readability.
 - Route styling uses payload type: 2/5 = Message (blue), 8/9 = Trace (orange), 4 = Advert (green).
 - If hop hashes collide, the backend skips those hashes (unique-only mapping).

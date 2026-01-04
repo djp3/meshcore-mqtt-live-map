@@ -36,9 +36,9 @@
       max-width: none;
     }
     .hud.panel-hidden .hud-body { display: none; }
-    .hud.panel-hidden .hud-github { display: none; }
+    .hud.panel-hidden .hud-action { display: none; }
     .hud.panel-hidden .hud-title { display: none; }
-    .hud-github {
+    .hud-action {
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -49,30 +49,20 @@
       border: 1px solid rgba(255,255,255,.2);
       color: #fff;
       text-decoration: none;
+      cursor: pointer;
       transition: background .2s ease, border-color .2s ease;
     }
-    .hud-github:hover {
+    .hud-action:hover {
       background: rgba(255,255,255,.22);
       border-color: rgba(255,255,255,.4);
     }
-    .hud-github svg { width: 16px; height: 16px; fill: currentColor; }
+    .hud-action svg { width: 16px; height: 16px; fill: currentColor; }
+    .hud-action.copied {
+      background: rgba(34,197,94,.35);
+      border-color: rgba(34,197,94,.6);
+    }
     .small { opacity: .85; font-size: 12px; }
     .pill { display:inline-block; padding:2px 8px; border-radius:999px; background: rgba(255,255,255,.12); margin-right:6px; }
-    .js-error {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      max-width: min(360px, calc(100vw - 24px));
-      padding: 10px 12px;
-      border-radius: 10px;
-      background: rgba(15, 23, 42, 0.92);
-      border: 1px solid rgba(248, 113, 113, 0.6);
-      color: #fee2e2;
-      font-size: 12px;
-      font-family: ui-sans-serif, system-ui, sans-serif;
-      z-index: 1200;
-      white-space: pre-wrap;
-    }
     .legend { margin-top: 8px; display: grid; gap: 6px; }
     .legend-item { display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: 0.9; }
     .legend-line { width: 30px; height: 0; border-top: 4px solid; display: inline-block; }

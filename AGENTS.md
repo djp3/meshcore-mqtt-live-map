@@ -47,6 +47,7 @@
 - `ROUTE_PATH_MAX_LEN` caps oversized path-hash lists (prevents bogus long routes).
 - Persisted state in `data/state.json` is loaded on startup; edit with care.
 - After editing `backend/*.py` or `backend/static/*`, rebuild with `docker compose up -d --build`.
+- History tool visibility is not persisted; it always loads off unless `history=on` is in the URL.
 
 ## Feature Notes
 - MQTT is WSS/TLS with meshcore-decoder in a Node helper for advert/location parsing.
@@ -73,3 +74,5 @@
 - PWA support is enabled via `/manifest.webmanifest` + `/sw.js` so mobile browsers can install the app.
 - Clicking the logo toggles the left HUD panel while LOS/Propagation panels remain open.
 - MQTT disconnect handler tolerates extra Paho args so the loop doesn’t crash; reconnects resume ingest.
+- Share button copies a URL with `lat`, `lon`, `zoom`, `layer`, `history`, `heat`, `labels`, `nodes`, `legend`, `units`, and `history_filter` params.
+- URL params override localStorage on load (`history=on` is the only way to load History open).
