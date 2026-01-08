@@ -4,7 +4,7 @@ Live MeshCore traffic map that renders nodes, routes, and activity in real time 
 
 Live example sites: 
  - https://live.bostonme.sh/
- - https://meshmap.nastic.icu/
+- https://map.eastmesh.au/
 
 
 ![Live map preview](example.gif)
