@@ -45,6 +45,9 @@
     const queryHistoryFilter = parseHistoryFilterParam(
       queryParams.get('history_filter') || queryParams.get('historyFilter') || queryParams.get('historyfilter')
     );
+    const initialUpdateAvailable = parseBoolParam(config.updateAvailable);
+    const initialUpdateLocal = (config.updateLocal || '').trim();
+    const initialUpdateRemote = (config.updateRemote || '').trim();
     const reportError = typeof window.__meshmapReportError === 'function'
       ? window.__meshmapReportError
       : (message) => console.warn(message);
@@ -142,6 +145,7 @@
     const HEAT_TTL_MS = 10 * 60 * 1000;
     const losLayer = L.layerGroup().addTo(map);
     const coverageApiUrl = (config.coverageApiUrl || '').trim();
+    const customLinkUrl = (config.customLinkUrl || '').trim();
     const coverageEnabled = Boolean(coverageApiUrl);
     const coverageLayer = L.layerGroup();
     let coverageVisible = false;
@@ -3346,6 +3350,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
           historyWindowSeconds = Number(snap.history_window_seconds);
           updateHistoryWindowLabel(historyWindowSeconds);
         }
+        if (snap.update) {
+          setUpdateBanner(snap.update);
+        }
         setStats();
       } catch (e) {
         console.warn("snapshot failed", e);
@@ -3385,6 +3392,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
           if (msg.history_window_seconds != null) {
             historyWindowSeconds = Number(msg.history_window_seconds);
             updateHistoryWindowLabel(historyWindowSeconds);
+          }
+          if (msg.update) {
+            setUpdateBanner(msg.update);
           }
           setStats();
           return;
@@ -3507,6 +3517,58 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
       if (overrideLegend !== null) {
         localStorage.setItem('meshmapLegendCollapsed', overrideLegend ? 'true' : 'false');
       }
+    }
+
+    const customLink = document.getElementById('custom-link');
+    const updateBanner = document.getElementById('update-banner');
+    const updateText = document.getElementById('update-text');
+    const updateDismiss = document.getElementById('update-dismiss');
+    let updateDismissKey = null;
+    const setUpdateBanner = (info) => {
+      if (!updateBanner) return;
+      if (!info || !info.available) {
+        updateBanner.hidden = true;
+        updateDismissKey = null;
+        return;
+      }
+      const remoteKey = info.remote_short || info.remote || 'update';
+      updateDismissKey = remoteKey;
+      const dismissed = localStorage.getItem('meshmapUpdateDismissed');
+      if (dismissed && dismissed === remoteKey) {
+        updateBanner.hidden = true;
+        return;
+      }
+      const localLabel = info.local_short || info.local || 'local';
+      const remoteLabel = info.remote_short || info.remote || 'remote';
+      if (updateText) {
+        updateText.textContent = `Update available (${localLabel} \u2192 ${remoteLabel})`;
+      }
+      updateBanner.hidden = false;
+    };
+    if (customLink) {
+      if (customLinkUrl) {
+        customLink.setAttribute('href', customLinkUrl);
+        customLink.setAttribute('title', customLinkUrl);
+      } else {
+        customLink.remove();
+      }
+    }
+    if (updateDismiss) {
+      updateDismiss.addEventListener('click', () => {
+        if (updateDismissKey) {
+          localStorage.setItem('meshmapUpdateDismissed', updateDismissKey);
+        }
+        if (updateBanner) updateBanner.hidden = true;
+      });
+    }
+    if (initialUpdateAvailable) {
+      setUpdateBanner({
+        available: true,
+        local_short: initialUpdateLocal || null,
+        remote_short: initialUpdateRemote || null,
+        local: initialUpdateLocal || null,
+        remote: initialUpdateRemote || null,
+      });
     }
 
     const shareToggle = document.getElementById('share-toggle');
