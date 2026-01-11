@@ -45,6 +45,7 @@
 - Map radius filter: `MAP_RADIUS_KM=241.4` (150mi). Set `0` to disable; applies to nodes, trails, routes, and history edges.
 - `MAP_RADIUS_SHOW=true` draws a debug circle centered on `MAP_START_LAT/LON`.
 - Set `TRAIL_LEN=0` to disable trails entirely; the HUD trail hint is removed when trails are off.
+- Coverage button only appears when `COVERAGE_API_URL` is set.
 - Route history modes default to `path,direct,fanout` via `ROUTE_HISTORY_ALLOWED_MODES`.
 - `ROUTE_PATH_MAX_LEN` caps oversized path-hash lists (prevents bogus long routes).
 - Persisted state in `data/state.json` is loaded on startup; edit with care.
@@ -73,6 +74,8 @@
 - History tool opens a right-side panel with a 5-step heat filter slider: All, Blue, Yellow, Yellow+Red, Red; legend swatch hides unless active.
 - History records routes for `path`, `direct`, and `fanout` modes by default; adjust with `ROUTE_HISTORY_ALLOWED_MODES`.
 - Propagation render stays visible until a new render; origin changes only mark it dirty.
+- Peers tool opens a right-side panel showing incoming/outgoing neighbors (counts + %) based on recent route history; selecting a node draws peer lines on the map.
+- Peers tool ignores nodes listed in `MQTT_ONLINE_FORCE_NAMES` (used for observer listeners).
 - Units toggle (km/mi) is stored in localStorage and defaults to `DISTANCE_UNITS`.
 - PWA support is enabled via `/manifest.webmanifest` + `/sw.js` so mobile browsers can install the app.
 - Clicking the logo toggles the left HUD panel while LOS/Propagation panels remain open.
