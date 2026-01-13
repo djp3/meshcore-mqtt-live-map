@@ -169,6 +169,7 @@ git_update_info = {
   "error": None,
 }
 
+
 # =========================
 # Helpers: coordinate hunting
 # =========================
@@ -197,7 +198,9 @@ def _serialize_state() -> Dict[str, Any]:
   return {
     "version": 1,
     "saved_at": time.time(),
-    "devices": {k: asdict(v) for k, v in devices.items()},
+    "devices": {
+      k: asdict(v) for k, v in devices.items()
+    },
     "trails": trails,
     "seen_devices": seen_devices,
     "device_names": device_names,
@@ -231,7 +234,8 @@ def _check_git_updates() -> None:
       stdout=subprocess.DEVNULL,
       stderr=subprocess.DEVNULL,
     )
-    inside = _run_git(["git", "-C", GIT_CHECK_PATH, "rev-parse", "--is-inside-work-tree"])
+    inside = _run_git(
+      ["git", "-C", GIT_CHECK_PATH, "rev-parse", "--is-inside-work-tree"])
     if inside.lower() != "true":
       git_update_info["error"] = "not_git_repo"
       return
@@ -256,7 +260,9 @@ def _check_git_updates() -> None:
     git_update_info["remote_short"] = remote_sha[:7]
     git_update_info["available"] = local_sha != remote_sha
     if git_update_info["available"]:
-      print(f"[update] available {git_update_info['local_short']} -> {git_update_info['remote_short']}")
+      print(
+        f"[update] available {git_update_info['local_short']} -> {git_update_info['remote_short']}"
+      )
   except Exception:
     git_update_info["error"] = "git_compare_failed"
 
@@ -282,7 +288,8 @@ def _device_payload(device_id: str, state: "DeviceState") -> Dict[str, Any]:
   if mqtt_seen_ts:
     payload["mqtt_seen_ts"] = mqtt_seen_ts
   if MQTT_ONLINE_FORCE_NAMES_SET:
-    name_value = (state.name or device_names.get(device_id) or "").strip().lower()
+    name_value = (state.name or device_names.get(device_id) or
+                  "").strip().lower()
     if name_value and name_value in MQTT_ONLINE_FORCE_NAMES_SET:
       payload["mqtt_forced"] = True
   if PROD_MODE:
@@ -294,7 +301,8 @@ def _iso_from_ts(ts: Optional[float]) -> Optional[str]:
   if ts is None:
     return None
   try:
-    return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(
+      float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
   except Exception:
     return None
 
@@ -399,12 +407,18 @@ def _route_payload(route: Dict[str, Any]) -> Dict[str, Any]:
 
 def _history_edge_payload(edge: Dict[str, Any]) -> Dict[str, Any]:
   return {
-    "id": edge.get("id"),
-    "a": edge.get("a"),
-    "b": edge.get("b"),
-    "count": edge.get("count"),
-    "last_ts": edge.get("last_ts"),
-    "recent": edge.get("recent") if isinstance(edge.get("recent"), list) else [],
+    "id":
+      edge.get("id"),
+    "a":
+      edge.get("a"),
+    "b":
+      edge.get("b"),
+    "count":
+      edge.get("count"),
+    "last_ts":
+      edge.get("last_ts"),
+    "recent":
+      edge.get("recent") if isinstance(edge.get("recent"), list) else [],
   }
 
 
@@ -423,7 +437,8 @@ def _require_prod_token(request: Request) -> None:
     return
   if not PROD_TOKEN:
     raise HTTPException(status_code=503, detail="prod_token_not_set")
-  token = request.query_params.get("token") or request.query_params.get("access_token")
+  token = request.query_params.get("token") or request.query_params.get(
+    "access_token")
   if not token:
     token = _extract_token(request.headers)
   if token != PROD_TOKEN:
@@ -461,7 +476,8 @@ def _load_state() -> None:
       state = DeviceState(**value)
     except Exception:
       continue
-    if _coords_are_zero(state.lat, state.lon) or not _within_map_radius(state.lat, state.lon):
+    if _coords_are_zero(
+        state.lat, state.lon) or not _within_map_radius(state.lat, state.lon):
       dropped_ids.add(str(key))
       continue
     loaded_devices[key] = state
@@ -488,7 +504,8 @@ def _load_state() -> None:
         lon_val = float(lon)
       except (TypeError, ValueError):
         continue
-      if _coords_are_zero(lat_val, lon_val) or not _within_map_radius(lat_val, lon_val):
+      if _coords_are_zero(lat_val,
+                          lon_val) or not _within_map_radius(lat_val, lon_val):
         trails_dirty = True
         continue
       filtered.append(list(entry))
@@ -511,7 +528,9 @@ def _load_state() -> None:
   raw_names = data.get("device_names") or {}
   if isinstance(raw_names, dict):
     device_names.clear()
-    device_names.update({str(k): str(v) for k, v in raw_names.items() if str(v).strip()})
+    device_names.update({
+      str(k): str(v) for k, v in raw_names.items() if str(v).strip()
+    })
   else:
     device_names.clear()
   if dropped_ids:
@@ -520,7 +539,9 @@ def _load_state() -> None:
   raw_role_sources = data.get("device_role_sources") or {}
   if isinstance(raw_role_sources, dict):
     device_role_sources.clear()
-    device_role_sources.update({str(k): str(v) for k, v in raw_role_sources.items() if str(v).strip()})
+    device_role_sources.update({
+      str(k): str(v) for k, v in raw_role_sources.items() if str(v).strip()
+    })
   else:
     device_role_sources.clear()
   if dropped_ids:
@@ -572,12 +593,19 @@ async def _state_saver() -> None:
 
 def mqtt_on_connect(client, userdata, flags, reason_code, properties=None):
   topics_str = ", ".join(MQTT_TOPICS)
-  print(f"[mqtt] connected reason_code={reason_code} subscribing topics={topics_str}")
+  print(
+    f"[mqtt] connected reason_code={reason_code} subscribing topics={topics_str}"
+  )
   for topic in MQTT_TOPICS:
     client.subscribe(topic, qos=0)
 
 
-def mqtt_on_disconnect(client, userdata, reason_code, properties=None, *args, **kwargs):
+def mqtt_on_disconnect(client,
+                       userdata,
+                       reason_code,
+                       properties=None,
+                       *args,
+                       **kwargs):
   print(f"[mqtt] disconnected reason_code={reason_code}")
 
 
@@ -597,12 +625,13 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
       last_sent = last_seen_broadcast.get(dev_guess, 0)
       if now - last_sent >= MQTT_SEEN_BROADCAST_MIN_SECONDS:
         last_seen_broadcast[dev_guess] = now
-        loop.call_soon_threadsafe(update_queue.put_nowait, {
-          "type": "device_seen",
-          "device_id": dev_guess,
-          "last_seen_ts": now,
-          "mqtt_seen_ts": now,
-        })
+        loop.call_soon_threadsafe(
+          update_queue.put_nowait, {
+            "type": "device_seen",
+            "device_id": dev_guess,
+            "last_seen_ts": now,
+            "mqtt_seen_ts": now,
+          })
 
   parsed, debug = _try_parse_payload(msg.topic, msg.payload)
   device_id_hint = parsed.get("device_id") if parsed else None
@@ -625,7 +654,8 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   role_target_id = origin_id
   if device_role and result.startswith("decoded"):
     role_target_id = None
-    loc_meta = decoder_meta.get("location") if isinstance(decoder_meta, dict) else None
+    loc_meta = decoder_meta.get("location") if isinstance(decoder_meta,
+                                                          dict) else None
     loc_pubkey = loc_meta.get("pubkey") if isinstance(loc_meta, dict) else None
     if isinstance(loc_pubkey, str) and loc_pubkey.strip():
       role_target_id = loc_pubkey
@@ -700,7 +730,8 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   direction = debug.get("direction")
   receiver_id = _device_id_from_topic(msg.topic)
   route_origin_id = None
-  loc_meta = decoder_meta.get("location") if isinstance(decoder_meta, dict) else None
+  loc_meta = decoder_meta.get("location") if isinstance(decoder_meta,
+                                                        dict) else None
   if isinstance(loc_meta, dict):
     decoded_pubkey = loc_meta.get("pubkey")
     if decoded_pubkey:
@@ -709,7 +740,12 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   if message_hash:
     cache = message_origins.get(message_hash)
     if not cache:
-      cache = {"origin_id": None, "first_rx": None, "receivers": set(), "ts": time.time()}
+      cache = {
+        "origin_id": None,
+        "first_rx": None,
+        "receivers": set(),
+        "ts": time.time()
+      }
       message_origins[message_hash] = cache
     cache["ts"] = time.time()
     origin_for_tx = origin_id or receiver_id
@@ -747,25 +783,47 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
 
   route_emitted = False
   if route_hashes and payload_type in ROUTE_PAYLOAD_TYPES_SET:
-    loop.call_soon_threadsafe(update_queue.put_nowait, {
-      "type": "route",
-      "path_hashes": route_hashes,
-      "payload_type": payload_type,
-      "message_hash": message_hash,
-      "origin_id": route_origin_id,
-      "receiver_id": receiver_id,
-      "snr_values": snr_values,
-      "route_type": route_type,
-      "ts": time.time(),
-      "topic": msg.topic,
-    })
+    loop.call_soon_threadsafe(
+      update_queue.put_nowait, {
+        "type": "route",
+        "path_hashes": route_hashes,
+        "payload_type": payload_type,
+        "message_hash": message_hash,
+        "origin_id": route_origin_id,
+        "receiver_id": receiver_id,
+        "snr_values": snr_values,
+        "route_type": route_type,
+        "ts": time.time(),
+        "topic": msg.topic,
+      })
     route_emitted = True
   elif message_hash and route_origin_id and receiver_id:
     if direction_value == "rx" and msg.topic.endswith("/packets"):
-      loop.call_soon_threadsafe(update_queue.put_nowait, {
+      loop.call_soon_threadsafe(
+        update_queue.put_nowait, {
+          "type": "route",
+          "route_mode": "fanout",
+          "route_id": f"{message_hash}-{receiver_id}",
+          "origin_id": route_origin_id,
+          "receiver_id": receiver_id,
+          "message_hash": message_hash,
+          "route_type": route_type,
+          "payload_type": payload_type,
+          "ts": time.time(),
+          "topic": msg.topic,
+        })
+      route_emitted = True
+
+  if (not route_emitted and direction_value == "rx" and
+      msg.topic.endswith("/packets") and receiver_id and route_origin_id and
+      receiver_id != route_origin_id and
+      payload_type in ROUTE_PAYLOAD_TYPES_SET):
+    fallback_id = message_hash or f"{route_origin_id}-{receiver_id}-{int(time.time() * 1000)}"
+    loop.call_soon_threadsafe(
+      update_queue.put_nowait, {
         "type": "route",
-        "route_mode": "fanout",
-        "route_id": f"{message_hash}-{receiver_id}",
+        "route_mode": "direct",
+        "route_id": f"direct-{fallback_id}",
         "origin_id": route_origin_id,
         "receiver_id": receiver_id,
         "message_hash": message_hash,
@@ -774,29 +832,13 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
         "ts": time.time(),
         "topic": msg.topic,
       })
-      route_emitted = True
-
-  if (not route_emitted and direction_value == "rx" and msg.topic.endswith("/packets")
-      and receiver_id and route_origin_id and receiver_id != route_origin_id
-      and payload_type in ROUTE_PAYLOAD_TYPES_SET):
-    fallback_id = message_hash or f"{route_origin_id}-{receiver_id}-{int(time.time() * 1000)}"
-    loop.call_soon_threadsafe(update_queue.put_nowait, {
-      "type": "route",
-      "route_mode": "direct",
-      "route_id": f"direct-{fallback_id}",
-      "origin_id": route_origin_id,
-      "receiver_id": receiver_id,
-      "message_hash": message_hash,
-      "route_type": route_type,
-      "payload_type": payload_type,
-      "ts": time.time(),
-      "topic": msg.topic,
-    })
 
   if not parsed:
     stats["unparsed_total"] += 1
     if DEBUG_PAYLOAD:
-      print(f"[mqtt] UNPARSED result={result} topic={msg.topic} preview={debug_entry['payload_preview']!r}")
+      print(
+        f"[mqtt] UNPARSED result={result} topic={msg.topic} preview={debug_entry['payload_preview']!r}"
+      )
     return
 
   parsed["raw_topic"] = msg.topic
@@ -805,9 +847,14 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   stats["last_parsed_topic"] = msg.topic
 
   if DEBUG_PAYLOAD:
-    print(f"[mqtt] PARSED topic={msg.topic} device={parsed['device_id']} lat={parsed['lat']} lon={parsed['lon']}")
+    print(
+      f"[mqtt] PARSED topic={msg.topic} device={parsed['device_id']} lat={parsed['lat']} lon={parsed['lon']}"
+    )
 
-  loop.call_soon_threadsafe(update_queue.put_nowait, {"type": "device", "data": parsed})
+  loop.call_soon_threadsafe(update_queue.put_nowait, {
+    "type": "device",
+    "data": parsed
+  })
 
 
 # =========================
@@ -817,7 +864,8 @@ async def broadcaster():
   while True:
     event = await update_queue.get()
 
-    if isinstance(event, dict) and event.get("type") in ("device_name", "device_role"):
+    if isinstance(event,
+                  dict) and event.get("type") in ("device_name", "device_role"):
       device_id = event.get("device_id")
       device_state = devices.get(device_id)
       if device_state:
@@ -825,7 +873,11 @@ async def broadcaster():
           device_state.name = device_names[device_id]
         if device_id in device_roles:
           device_state.role = device_roles[device_id]
-        payload = {"type": "update", "device": _device_payload(device_id, device_state), "trail": trails.get(device_id, [])}
+        payload = {
+          "type": "update",
+          "device": _device_payload(device_id, device_state),
+          "trail": trails.get(device_id, [])
+        }
         dead = []
         for ws in list(clients):
           try:
@@ -891,31 +943,35 @@ async def broadcaster():
         )
 
       if not points and route_mode == "fanout":
-        points = _route_points_from_device_ids(event.get("origin_id"), event.get("receiver_id"))
-        if points and event.get("origin_id") and event.get("receiver_id") and len(points) == 2:
+        points = _route_points_from_device_ids(event.get("origin_id"),
+                                               event.get("receiver_id"))
+        if points and event.get("origin_id") and event.get(
+            "receiver_id") and len(points) == 2:
           point_ids = [event.get("origin_id"), event.get("receiver_id")]
 
       # Fallback: if path hashes are missing/unknown, draw a direct link when possible.
       if not points:
-        points = _route_points_from_device_ids(event.get("origin_id"), event.get("receiver_id"))
+        points = _route_points_from_device_ids(event.get("origin_id"),
+                                               event.get("receiver_id"))
         if points:
           route_mode = "direct"
-          if event.get("origin_id") and event.get("receiver_id") and len(points) == 2:
+          if event.get("origin_id") and event.get("receiver_id") and len(
+              points) == 2:
             point_ids = [event.get("origin_id"), event.get("receiver_id")]
 
       if not points:
         continue
 
       if MAP_RADIUS_KM > 0:
-        outside = any(
-          not _within_map_radius(point[0], point[1])
-          for point in points
-          if isinstance(point, (list, tuple)) and len(point) >= 2
-        )
+        outside = any(not _within_map_radius(point[0], point[1])
+                      for point in points
+                      if isinstance(point, (list, tuple)) and len(point) >= 2)
         if outside:
           continue
 
-      route_id = event.get("route_id") or event.get("message_hash") or f"{event.get('origin_id', 'route')}-{int(event.get('ts', time.time()) * 1000)}"
+      route_id = event.get("route_id") or event.get(
+        "message_hash"
+      ) or f"{event.get('origin_id', 'route')}-{int(event.get('ts', time.time()) * 1000)}"
       expires_at = (event.get("ts") or time.time()) + ROUTE_TTL_SECONDS
       route = {
         "id": route_id,
@@ -950,9 +1006,14 @@ async def broadcaster():
         history_payload = {}
         if history_updates:
           history_payload["type"] = "history_edges"
-          history_payload["edges"] = [_history_edge_payload(edge) for edge in history_updates]
+          history_payload["edges"] = [
+            _history_edge_payload(edge) for edge in history_updates
+          ]
         if history_removed:
-          history_payload_remove = {"type": "history_edges_remove", "edge_ids": history_removed}
+          history_payload_remove = {
+            "type": "history_edges_remove",
+            "edge_ids": history_removed
+          }
         else:
           history_payload_remove = None
         dead = []
@@ -968,7 +1029,8 @@ async def broadcaster():
           clients.discard(ws)
       continue
 
-    upd = event.get("data") if isinstance(event, dict) and event.get("type") == "device" else event
+    upd = event.get("data") if isinstance(
+      event, dict) and event.get("type") == "device" else event
 
     device_id = upd["device_id"]
     if not _within_map_radius(upd.get("lat"), upd.get("lon")):
@@ -1007,15 +1069,21 @@ async def broadcaster():
     if device_state.role:
       device_roles[device_id] = device_state.role
 
-    if TRAIL_LEN > 0 and not _coords_are_zero(device_state.lat, device_state.lon):
+    if TRAIL_LEN > 0 and not _coords_are_zero(device_state.lat,
+                                              device_state.lon):
       trails.setdefault(device_id, [])
-      trails[device_id].append([device_state.lat, device_state.lon, device_state.ts])
+      trails[device_id].append(
+        [device_state.lat, device_state.lon, device_state.ts])
       if len(trails[device_id]) > TRAIL_LEN:
         trails[device_id] = trails[device_id][-TRAIL_LEN:]
     elif device_id in trails:
       trails.pop(device_id, None)
 
-    payload = {"type": "update", "device": _device_payload(device_id, device_state), "trail": trails.get(device_id, [])}
+    payload = {
+      "type": "update",
+      "device": _device_payload(device_id, device_state),
+      "trail": trails.get(device_id, [])
+    }
 
     dead = []
     for ws in list(clients):
@@ -1032,7 +1100,10 @@ async def reaper():
     now = time.time()
 
     if DEVICE_TTL_SECONDS > 0:
-      stale = [dev_id for dev_id, st in list(devices.items()) if now - st.ts > DEVICE_TTL_SECONDS]
+      stale = [
+        dev_id for dev_id, st in list(devices.items())
+        if now - st.ts > DEVICE_TTL_SECONDS
+      ]
       if stale:
         payload = {"type": "stale", "device_ids": stale}
         dead = []
@@ -1056,7 +1127,10 @@ async def reaper():
         points = route.get("points") if isinstance(route, dict) else None
         if not isinstance(points, list):
           continue
-        if any(_coords_are_zero(p[0], p[1]) for p in points if isinstance(p, list) and len(p) >= 2):
+        if any(
+            _coords_are_zero(p[0], p[1])
+            for p in points
+            if isinstance(p, list) and len(p) >= 2):
           bad_routes.append(route_id)
       if bad_routes:
         payload = {"type": "route_remove", "route_ids": bad_routes}
@@ -1071,7 +1145,10 @@ async def reaper():
         for route_id in bad_routes:
           routes.pop(route_id, None)
 
-    stale_routes = [route_id for route_id, route in list(routes.items()) if now > route.get("expires_at", 0)]
+    stale_routes = [
+      route_id for route_id, route in list(routes.items())
+      if now > route.get("expires_at", 0)
+    ]
     if stale_routes:
       payload = {"type": "route_remove", "route_ids": stale_routes}
       dead = []
@@ -1091,9 +1168,17 @@ async def reaper():
       for ws in list(clients):
         try:
           if history_updates:
-            await ws.send_text(json.dumps({"type": "history_edges", "edges": history_updates}))
+            await ws.send_text(
+              json.dumps({
+                "type": "history_edges",
+                "edges": history_updates
+              }))
           if history_removed:
-            await ws.send_text(json.dumps({"type": "history_edges_remove", "edge_ids": history_removed}))
+            await ws.send_text(
+              json.dumps({
+                "type": "history_edges_remove",
+                "edge_ids": history_removed
+              }))
         except Exception:
           dead.append(ws)
       for ws in dead:
@@ -1101,14 +1186,17 @@ async def reaper():
 
     if HEAT_TTL_SECONDS > 0 and heat_events:
       cutoff = now - HEAT_TTL_SECONDS
-      heat_events[:] = [entry for entry in heat_events if entry.get("ts", 0) >= cutoff]
+      heat_events[:] = [
+        entry for entry in heat_events if entry.get("ts", 0) >= cutoff
+      ]
 
     if message_origins:
       for msg_hash, info in list(message_origins.items()):
         if now - info.get("ts", 0) > MESSAGE_ORIGIN_TTL_SECONDS:
           message_origins.pop(msg_hash, None)
 
-    prune_after = max(DEVICE_TTL_SECONDS * 3, 900) if DEVICE_TTL_SECONDS > 0 else 86400
+    prune_after = max(DEVICE_TTL_SECONDS *
+                      3, 900) if DEVICE_TTL_SECONDS > 0 else 86400
     for dev_id, last in list(seen_devices.items()):
       if now - last > prune_after:
         seen_devices.pop(dev_id, None)
@@ -1143,35 +1231,64 @@ def root():
     trail_info_suffix = f" Trails show last ~{TRAIL_LEN} points."
 
   replacements = {
-    "SITE_TITLE": SITE_TITLE,
-    "SITE_DESCRIPTION": SITE_DESCRIPTION,
-    "SITE_URL": SITE_URL,
-    "SITE_ICON": SITE_ICON,
-    "SITE_FEED_NOTE": SITE_FEED_NOTE,
-    "CUSTOM_LINK_URL": CUSTOM_LINK_URL,
-    "DISTANCE_UNITS": DISTANCE_UNITS,
-    "NODE_MARKER_RADIUS": NODE_MARKER_RADIUS,
-    "HISTORY_LINK_SCALE": HISTORY_LINK_SCALE,
-    "TRAIL_INFO_SUFFIX": trail_info_suffix,
-    "PROD_MODE": str(PROD_MODE).lower(),
-    "PROD_TOKEN": PROD_TOKEN,
-    "MAP_START_LAT": MAP_START_LAT,
-    "MAP_START_LON": MAP_START_LON,
-    "MAP_START_ZOOM": MAP_START_ZOOM,
-    "MAP_RADIUS_KM": MAP_RADIUS_KM,
-    "MAP_RADIUS_SHOW": str(MAP_RADIUS_SHOW).lower(),
-    "MAP_DEFAULT_LAYER": MAP_DEFAULT_LAYER,
-    "LOS_ELEVATION_URL": LOS_ELEVATION_URL,
-    "LOS_SAMPLE_MIN": LOS_SAMPLE_MIN,
-    "LOS_SAMPLE_MAX": LOS_SAMPLE_MAX,
-    "LOS_SAMPLE_STEP_METERS": LOS_SAMPLE_STEP_METERS,
-  "LOS_PEAKS_MAX": LOS_PEAKS_MAX,
-  "MQTT_ONLINE_SECONDS": MQTT_ONLINE_SECONDS,
-  "COVERAGE_API_URL": COVERAGE_API_URL,
-  "UPDATE_AVAILABLE": str(bool(git_update_info.get("available"))).lower(),
-  "UPDATE_LOCAL": git_update_info.get("local_short") or "",
-  "UPDATE_REMOTE": git_update_info.get("remote_short") or "",
-  "UPDATE_BANNER_HIDDEN": "" if git_update_info.get("available") else "hidden",
+    "SITE_TITLE":
+      SITE_TITLE,
+    "SITE_DESCRIPTION":
+      SITE_DESCRIPTION,
+    "SITE_URL":
+      SITE_URL,
+    "SITE_ICON":
+      SITE_ICON,
+    "SITE_FEED_NOTE":
+      SITE_FEED_NOTE,
+    "CUSTOM_LINK_URL":
+      CUSTOM_LINK_URL,
+    "DISTANCE_UNITS":
+      DISTANCE_UNITS,
+    "NODE_MARKER_RADIUS":
+      NODE_MARKER_RADIUS,
+    "HISTORY_LINK_SCALE":
+      HISTORY_LINK_SCALE,
+    "TRAIL_INFO_SUFFIX":
+      trail_info_suffix,
+    "PROD_MODE":
+      str(PROD_MODE).lower(),
+    "PROD_TOKEN":
+      PROD_TOKEN,
+    "MAP_START_LAT":
+      MAP_START_LAT,
+    "MAP_START_LON":
+      MAP_START_LON,
+    "MAP_START_ZOOM":
+      MAP_START_ZOOM,
+    "MAP_RADIUS_KM":
+      MAP_RADIUS_KM,
+    "MAP_RADIUS_SHOW":
+      str(MAP_RADIUS_SHOW).lower(),
+    "MAP_DEFAULT_LAYER":
+      MAP_DEFAULT_LAYER,
+    "LOS_ELEVATION_URL":
+      LOS_ELEVATION_URL,
+    "LOS_SAMPLE_MIN":
+      LOS_SAMPLE_MIN,
+    "LOS_SAMPLE_MAX":
+      LOS_SAMPLE_MAX,
+    "LOS_SAMPLE_STEP_METERS":
+      LOS_SAMPLE_STEP_METERS,
+    "LOS_PEAKS_MAX":
+      LOS_PEAKS_MAX,
+    "MQTT_ONLINE_SECONDS":
+      MQTT_ONLINE_SECONDS,
+    "COVERAGE_API_URL":
+      COVERAGE_API_URL,
+    "UPDATE_AVAILABLE":
+      str(bool(git_update_info.get("available"))).lower(),
+    "UPDATE_LOCAL":
+      git_update_info.get("local_short") or "",
+    "UPDATE_REMOTE":
+      git_update_info.get("remote_short") or "",
+    "UPDATE_BANNER_HIDDEN":
+      "" if git_update_info.get("available") else "hidden",
   }
   for key, value in replacements.items():
     safe_value = html.escape(str(value), quote=True)
@@ -1184,20 +1301,17 @@ def root():
 def manifest():
   icons = []
   if SITE_ICON:
-    icons = [
-      {
-        "src": SITE_ICON,
-        "sizes": "192x192",
-        "type": "image/png",
-        "purpose": "any"
-      },
-      {
-        "src": SITE_ICON,
-        "sizes": "512x512",
-        "type": "image/png",
-        "purpose": "any maskable"
-      }
-    ]
+    icons = [{
+      "src": SITE_ICON,
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    }, {
+      "src": SITE_ICON,
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }]
   short_name = SITE_TITLE if len(SITE_TITLE) <= 12 else SITE_TITLE[:12]
   return JSONResponse(
     {
@@ -1225,10 +1339,14 @@ def service_worker():
 def snapshot(request: Request):
   _require_prod_token(request)
   return {
-    "devices": {k: _device_payload(k, v) for k, v in devices.items()},
+    "devices": {
+      k: _device_payload(k, v) for k, v in devices.items()
+    },
     "trails": trails,
     "routes": [_route_payload(r) for r in routes.values()],
-    "history_edges": [_history_edge_payload(e) for e in route_history_edges.values()],
+    "history_edges": [
+      _history_edge_payload(e) for e in route_history_edges.values()
+    ],
     "history_window_seconds": int(max(0, ROUTE_HISTORY_HOURS * 3600)),
     "heat": _serialize_heat_events(),
     "update": git_update_info,
@@ -1255,35 +1373,50 @@ def get_stats():
       "server_time": time.time(),
     }
 
-  top_topics = sorted(topic_counts.items(), key=lambda kv: kv[1], reverse=True)[:20]
+  top_topics = sorted(topic_counts.items(), key=lambda kv: kv[1],
+                      reverse=True)[:20]
   return {
-    "stats": stats,
-    "result_counts": result_counts,
-    "mapped_devices": len(devices),
-    "route_count": len(routes),
-    "history_edge_count": len(route_history_edges),
-    "history_segments": len(route_history_segments),
-    "seen_devices": len(seen_devices),
-    "seen_recent": sorted(seen_devices.items(), key=lambda kv: kv[1], reverse=True)[:20],
-    "top_topics": top_topics,
+    "stats":
+      stats,
+    "result_counts":
+      result_counts,
+    "mapped_devices":
+      len(devices),
+    "route_count":
+      len(routes),
+    "history_edge_count":
+      len(route_history_edges),
+    "history_segments":
+      len(route_history_segments),
+    "seen_devices":
+      len(seen_devices),
+    "seen_recent":
+      sorted(seen_devices.items(), key=lambda kv: kv[1], reverse=True)[:20],
+    "top_topics":
+      top_topics,
     "decoder": {
       "decode_with_node": DECODE_WITH_NODE,
       "node_ready": _node_ready_once,
       "node_unavailable": _node_unavailable_once,
     },
-    "route_payload_types": sorted(ROUTE_PAYLOAD_TYPES_SET),
+    "route_payload_types":
+      sorted(ROUTE_PAYLOAD_TYPES_SET),
     "direct_coords": {
       "mode": DIRECT_COORDS_MODE,
       "topic_regex": DIRECT_COORDS_TOPIC_REGEX,
       "regex_valid": DIRECT_COORDS_TOPIC_RE is not None,
       "allow_zero": DIRECT_COORDS_ALLOW_ZERO,
     },
-    "server_time": time.time(),
+    "server_time":
+      time.time(),
   }
 
 
 @app.get("/api/nodes")
-def api_nodes(request: Request, updated_since: Optional[str] = None, mode: Optional[str] = None, format: Optional[str] = None):
+def api_nodes(request: Request,
+              updated_since: Optional[str] = None,
+              mode: Optional[str] = None,
+              format: Optional[str] = None):
   _require_prod_token(request)
   cutoff = _parse_updated_since(updated_since)
   mode_value = (mode or "").strip().lower()
@@ -1330,14 +1463,18 @@ def get_peers(device_id: str, request: Request, limit: int = 8):
   if state and not _coords_are_zero(state.lat, state.lon):
     payload["lat"] = float(state.lat)
     payload["lon"] = float(state.lon)
-  payload["name"] = (state.name if state else None) or device_names.get(device_id) or ""
-  payload["role"] = (state.role if state else None) or device_roles.get(device_id)
-  payload["last_seen_ts"] = seen_devices.get(device_id) or (state.ts if state else None)
+  payload["name"] = (state.name
+                     if state else None) or device_names.get(device_id) or ""
+  payload["role"] = (state.role
+                     if state else None) or device_roles.get(device_id)
+  payload["last_seen_ts"] = seen_devices.get(device_id) or (state.ts
+                                                            if state else None)
   payload["server_time"] = time.time()
   return payload
 
 
-def _peer_device_payload(peer_id: str, count: int, total: int, last_ts: Optional[float]) -> Dict[str, Any]:
+def _peer_device_payload(peer_id: str, count: int, total: int,
+                         last_ts: Optional[float]) -> Dict[str, Any]:
   state = devices.get(peer_id)
   name = None
   role = None
@@ -1406,11 +1543,13 @@ def _peer_stats_for_device(device_id: str, limit: int) -> Dict[str, Any]:
   outbound_total = sum(outbound.values())
 
   inbound_items = [
-    _peer_device_payload(peer_id, count, inbound_total, inbound_last.get(peer_id))
+    _peer_device_payload(peer_id, count, inbound_total,
+                         inbound_last.get(peer_id))
     for peer_id, count in inbound.items()
   ]
   outbound_items = [
-    _peer_device_payload(peer_id, count, outbound_total, outbound_last.get(peer_id))
+    _peer_device_payload(peer_id, count, outbound_total,
+                         outbound_last.get(peer_id))
     for peer_id, count in outbound.items()
   ]
   inbound_items.sort(key=lambda item: item.get("count", 0), reverse=True)
@@ -1431,7 +1570,11 @@ def _peer_stats_for_device(device_id: str, limit: int) -> Dict[str, Any]:
 
 
 @app.get("/los")
-def line_of_sight(lat1: float, lon1: float, lat2: float, lon2: float, profile: bool = False):
+def line_of_sight(lat1: float,
+                  lon1: float,
+                  lat2: float,
+                  lon2: float,
+                  profile: bool = False):
   include_points = bool(profile)
   start = _normalize_lat_lon(lat1, lon1)
   end = _normalize_lat_lon(lat2, lon2)
@@ -1484,17 +1627,23 @@ def line_of_sight(lat1: float, lon1: float, lat2: float, lon2: float, profile: b
     "peaks": peaks,
   }
   if include_points:
-    response["profile_points"] = [
-      [round(lat, 6), round(lon, 6), round(t, 4), round(float(elev), 2)]
-      for (lat, lon, t), elev in zip(points, elevations)
-    ]
+    response["profile_points"] = [[
+      round(lat, 6),
+      round(lon, 6),
+      round(t, 4),
+      round(float(elev), 2)
+    ] for (lat, lon, t), elev in zip(points, elevations)]
   return response
 
 
 @app.get("/coverage")
 async def get_coverage():
   if not COVERAGE_API_URL:
-    raise HTTPException(status_code=503, detail="coverage_api_not_configured: Set COVERAGE_API_URL in .env (e.g., http://localhost:3000)")
+    raise HTTPException(
+      status_code=503,
+      detail=
+      "coverage_api_not_configured: Set COVERAGE_API_URL in .env (e.g., http://localhost:3000)"
+    )
   try:
     url = f"{COVERAGE_API_URL}/get-samples"
     print(f"[coverage] Fetching from {url}")
@@ -1503,19 +1652,29 @@ async def get_coverage():
       response.raise_for_status()
       data = response.json()
       # /get-samples returns { keys: [...] }, extract the keys array
-      samples = data.get("keys", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-      print(f"[coverage] Received {len(samples) if isinstance(samples, list) else 'non-list'} items from coverage API")
+      samples = data.get("keys", []) if isinstance(
+        data, dict) else (data if isinstance(data, list) else [])
+      print(
+        f"[coverage] Received {len(samples) if isinstance(samples, list) else 'non-list'} items from coverage API"
+      )
       if isinstance(samples, list) and len(samples) > 0:
-        print(f"[coverage] Sample item keys: {list(samples[0].keys()) if samples[0] else 'N/A'}")
+        print(
+          f"[coverage] Sample item keys: {list(samples[0].keys()) if samples[0] else 'N/A'}"
+        )
       return samples
   except httpx.TimeoutException:
     raise HTTPException(status_code=504, detail="coverage_api_timeout")
   except httpx.HTTPStatusError as e:
-    raise HTTPException(status_code=502, detail=f"coverage_api_error: HTTP {e.response.status_code} from {COVERAGE_API_URL}")
+    raise HTTPException(
+      status_code=502,
+      detail=
+      f"coverage_api_error: HTTP {e.response.status_code} from {COVERAGE_API_URL}"
+    )
   except httpx.HTTPError as e:
     raise HTTPException(status_code=502, detail=f"coverage_api_error: {str(e)}")
   except Exception as e:
-    raise HTTPException(status_code=500, detail=f"coverage_fetch_error: {str(e)}")
+    raise HTTPException(status_code=500,
+                        detail=f"coverage_fetch_error: {str(e)}")
 
 
 @app.get("/debug/last")
@@ -1549,16 +1708,21 @@ async def ws_endpoint(ws: WebSocket):
   await ws.accept()
   clients.add(ws)
 
-  await ws.send_text(json.dumps({
-    "type": "snapshot",
-    "devices": {k: _device_payload(k, v) for k, v in devices.items()},
-    "trails": trails,
-    "routes": [_route_payload(r) for r in routes.values()],
-    "history_edges": [_history_edge_payload(e) for e in route_history_edges.values()],
-    "history_window_seconds": int(max(0, ROUTE_HISTORY_HOURS * 3600)),
-    "heat": _serialize_heat_events(),
-    "update": git_update_info,
-  }))
+  await ws.send_text(
+    json.dumps({
+      "type": "snapshot",
+      "devices": {
+        k: _device_payload(k, v) for k, v in devices.items()
+      },
+      "trails": trails,
+      "routes": [_route_payload(r) for r in routes.values()],
+      "history_edges": [
+        _history_edge_payload(e) for e in route_history_edges.values()
+      ],
+      "history_window_seconds": int(max(0, ROUTE_HISTORY_HOURS * 3600)),
+      "heat": _serialize_heat_events(),
+      "update": git_update_info,
+    }))
 
   try:
     while True:

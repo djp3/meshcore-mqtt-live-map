@@ -39,9 +39,7 @@ RE_LAT_LON = re.compile(
 )
 
 # e.g. "42.3601 -71.0589" (two floats)
-RE_TWO_FLOATS = re.compile(
-  r"(-?\d{1,2}\.\d+)\s*[,\s]+\s*(-?\d{1,3}\.\d+)"
-)
+RE_TWO_FLOATS = re.compile(r"(-?\d{1,2}\.\d+)\s*[,\s]+\s*(-?\d{1,3}\.\d+)")
 
 BASE64_LIKE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 NODE_HASH_RE = re.compile(r"^[0-9a-fA-F]{2}$")
@@ -60,8 +58,18 @@ for _part in ROUTE_PAYLOAD_TYPES.split(","):
     pass
 
 LIKELY_PACKET_KEYS = (
-  "hex", "raw", "packet", "packet_hex", "frame", "data", "payload",
-  "mesh_packet", "meshcore_packet", "rx_packet", "bytes", "packet_bytes",
+  "hex",
+  "raw",
+  "packet",
+  "packet_hex",
+  "frame",
+  "data",
+  "payload",
+  "mesh_packet",
+  "meshcore_packet",
+  "rx_packet",
+  "bytes",
+  "packet_bytes",
 )
 
 try:
@@ -299,7 +307,10 @@ def _choose_device_for_hash(node_hash: str, ts: float) -> Optional[str]:
   return best_id
 
 
-def _route_points_from_hashes(path_hashes: List[Any], origin_id: Optional[str], receiver_id: Optional[str], ts: float) -> Tuple[Optional[List[List[float]]], List[str], List[Optional[str]]]:
+def _route_points_from_hashes(
+  path_hashes: List[Any], origin_id: Optional[str], receiver_id: Optional[str],
+  ts: float
+) -> Tuple[Optional[List[List[float]]], List[str], List[Optional[str]]]:
   normalized: List[str] = []
   for raw in path_hashes:
     key = _normalize_node_hash(raw)
@@ -308,14 +319,17 @@ def _route_points_from_hashes(path_hashes: List[Any], origin_id: Optional[str], 
   if ROUTE_PATH_MAX_LEN > 0 and len(normalized) > ROUTE_PATH_MAX_LEN:
     return None, [], []
 
-  receiver_hash = _node_hash_from_device_id(receiver_id) if receiver_id else None
+  receiver_hash = _node_hash_from_device_id(
+    receiver_id) if receiver_id else None
   origin_hash = _node_hash_from_device_id(origin_id) if origin_id else None
 
   if receiver_hash and receiver_hash in normalized:
-    if normalized and normalized[0] == receiver_hash and normalized[-1] != receiver_hash:
+    if normalized and normalized[0] == receiver_hash and normalized[
+        -1] != receiver_hash:
       normalized.reverse()
   elif origin_hash and origin_hash in normalized:
-    if normalized and normalized[-1] == origin_hash and normalized[0] != origin_hash:
+    if normalized and normalized[-1] == origin_hash and normalized[
+        0] != origin_hash:
       normalized.reverse()
 
   points: List[List[float]] = []
@@ -341,7 +355,8 @@ def _route_points_from_hashes(path_hashes: List[Any], origin_id: Optional[str], 
   origin_point = None
   if origin_id:
     origin_state = devices.get(origin_id)
-    if origin_state and not _coords_are_zero(origin_state.lat, origin_state.lon):
+    if origin_state and not _coords_are_zero(origin_state.lat,
+                                             origin_state.lon):
       origin_point = [origin_state.lat, origin_state.lon]
       if not points or points[0] != origin_point:
         points.insert(0, origin_point)
@@ -352,7 +367,8 @@ def _route_points_from_hashes(path_hashes: List[Any], origin_id: Optional[str], 
   receiver_point = None
   if receiver_id:
     receiver_state = devices.get(receiver_id)
-    if receiver_state and not _coords_are_zero(receiver_state.lat, receiver_state.lon):
+    if receiver_state and not _coords_are_zero(receiver_state.lat,
+                                               receiver_state.lon):
       receiver_point = [receiver_state.lat, receiver_state.lon]
       if points and receiver_point != points[-1]:
         points.append(receiver_point)
@@ -366,14 +382,17 @@ def _route_points_from_hashes(path_hashes: List[Any], origin_id: Optional[str], 
   return points, used_hashes, point_ids
 
 
-def _route_points_from_device_ids(origin_id: Optional[str], receiver_id: Optional[str]) -> Optional[List[List[float]]]:
+def _route_points_from_device_ids(
+    origin_id: Optional[str],
+    receiver_id: Optional[str]) -> Optional[List[List[float]]]:
   if not origin_id or not receiver_id or origin_id == receiver_id:
     return None
   origin_state = devices.get(origin_id)
   receiver_state = devices.get(receiver_id)
   if not origin_state or not receiver_state:
     return None
-  if _coords_are_zero(origin_state.lat, origin_state.lon) or _coords_are_zero(receiver_state.lat, receiver_state.lon):
+  if _coords_are_zero(origin_state.lat, origin_state.lon) or _coords_are_zero(
+      receiver_state.lat, receiver_state.lon):
     return None
   points = [
     [origin_state.lat, origin_state.lon],
@@ -384,7 +403,8 @@ def _route_points_from_device_ids(origin_id: Optional[str], receiver_id: Optiona
   return points
 
 
-def _append_heat_points(points: List[List[float]], ts: float, payload_type: Optional[int]) -> None:
+def _append_heat_points(points: List[List[float]], ts: float,
+                        payload_type: Optional[int]) -> None:
   if HEAT_TTL_SECONDS <= 0:
     return
   for point in points:
@@ -400,12 +420,12 @@ def _serialize_heat_events() -> List[List[float]]:
   if HEAT_TTL_SECONDS <= 0:
     return []
   cutoff = time.time() - HEAT_TTL_SECONDS
-  return [
-    [entry.get("lat"), entry.get("lon"), entry.get("ts"), entry.get("weight", 0.7)]
-    for entry in heat_events
-    if entry.get("ts", 0) >= cutoff
-  ]
-
+  return [[
+    entry.get("lat"),
+    entry.get("lon"),
+    entry.get("ts"),
+    entry.get("weight", 0.7)
+  ] for entry in heat_events if entry.get("ts", 0) >= cutoff]
 
 
 def _extract_device_name(obj: Any, topic: str) -> Optional[str]:
@@ -413,15 +433,15 @@ def _extract_device_name(obj: Any, topic: str) -> Optional[str]:
     return None
 
   for key in (
-    "name",
-    "device_name",
-    "deviceName",
-    "node_name",
-    "nodeName",
-    "display_name",
-    "displayName",
-    "callsign",
-    "label",
+      "name",
+      "device_name",
+      "deviceName",
+      "node_name",
+      "nodeName",
+      "display_name",
+      "displayName",
+      "callsign",
+      "label",
   ):
     value = obj.get(key)
     if isinstance(value, str) and value.strip():
@@ -453,17 +473,17 @@ def _extract_device_role(obj: Any, topic: str) -> Optional[str]:
     return None
 
   for key in (
-    "role",
-    "device_role",
-    "deviceRole",
-    "node_role",
-    "nodeRole",
-    "node_type",
-    "nodeType",
-    "device_type",
-    "deviceType",
-    "class",
-    "profile",
+      "role",
+      "device_role",
+      "deviceRole",
+      "node_role",
+      "nodeRole",
+      "node_type",
+      "nodeType",
+      "device_type",
+      "deviceType",
+      "class",
+      "profile",
   ):
     value = obj.get(key)
     if isinstance(value, str):
@@ -474,7 +494,8 @@ def _extract_device_role(obj: Any, topic: str) -> Optional[str]:
   return None
 
 
-def _apply_meta_role(debug: Dict[str, Any], meta: Optional[Dict[str, Any]]) -> None:
+def _apply_meta_role(debug: Dict[str, Any], meta: Optional[Dict[str,
+                                                                Any]]) -> None:
   if debug.get("device_role"):
     return
   if not isinstance(meta, dict):
@@ -494,11 +515,13 @@ def _apply_meta_role(debug: Dict[str, Any], meta: Optional[Dict[str, Any]]) -> N
     if normalized:
       debug["device_role"] = normalized
 
+
 def _has_location_hints(obj: Any) -> bool:
   if isinstance(obj, dict):
     for k, v in obj.items():
       key = str(k).lower()
-      if key in ("location", "gps", "position", "coords", "coordinate", "geo", "geolocation", "latlon"):
+      if key in ("location", "gps", "position", "coords", "coordinate", "geo",
+                 "geolocation", "latlon"):
         return True
       if isinstance(v, (dict, list)) and _has_location_hints(v):
         return True
@@ -533,6 +556,7 @@ def _direct_coords_allowed(topic: str, obj: Any) -> bool:
 # MeshCore decoder via Node
 # =========================
 
+
 def _ensure_node_decoder() -> bool:
   global _node_ready_once, _node_unavailable_once
 
@@ -544,7 +568,10 @@ def _ensure_node_decoder() -> bool:
     return False
 
   try:
-    subprocess.run(["node", "-v"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["node", "-v"],
+                   check=True,
+                   stdout=subprocess.DEVNULL,
+                   stderr=subprocess.DEVNULL)
   except Exception:
     _node_unavailable_once = True
     print("[decode] node not found in container")
@@ -552,7 +579,10 @@ def _ensure_node_decoder() -> bool:
 
   try:
     subprocess.run(
-      ["node", "--input-type=module", "-e", "import('@michaelhart/meshcore-decoder')"],
+      [
+        "node", "--input-type=module", "-e",
+        "import('@michaelhart/meshcore-decoder')"
+      ],
       check=True,
       stdout=subprocess.DEVNULL,
       stderr=subprocess.DEVNULL,
@@ -671,9 +701,15 @@ try {
   return True
 
 
-def _decode_meshcore_hex(hex_str: str) -> Tuple[Optional[float], Optional[float], Optional[str], Optional[str], Dict[str, Any]]:
+def _decode_meshcore_hex(
+  hex_str: str
+) -> Tuple[Optional[float], Optional[float], Optional[str], Optional[str], Dict[
+    str, Any]]:
   if not _ensure_node_decoder():
-    return (None, None, None, None, {"ok": False, "error": "node_decoder_unavailable"})
+    return (None, None, None, None, {
+      "ok": False,
+      "error": "node_decoder_unavailable"
+    })
 
   try:
     proc = subprocess.run(
@@ -688,12 +724,19 @@ def _decode_meshcore_hex(hex_str: str) -> Tuple[Optional[float], Optional[float]
 
   out = (proc.stdout or "").strip()
   if not out:
-    return (None, None, None, None, {"ok": False, "error": "empty_decoder_output"})
+    return (None, None, None, None, {
+      "ok": False,
+      "error": "empty_decoder_output"
+    })
 
   try:
     data = json.loads(out)
   except Exception:
-    return (None, None, None, None, {"ok": False, "error": "decoder_output_not_json", "output": out})
+    return (None, None, None, None, {
+      "ok": False,
+      "error": "decoder_output_not_json",
+      "output": out
+    })
 
   if not data.get("ok"):
     return (None, None, None, None, {"ok": False, **data})
@@ -711,12 +754,16 @@ def _decode_meshcore_hex(hex_str: str) -> Tuple[Optional[float], Optional[float]
   if normalized:
     return (normalized[0], normalized[1], pubkey, name, {"ok": True, **data})
 
-  return (None, None, pubkey, name, {"ok": True, **data, "note": "decoded_no_location"})
+  return (None, None, pubkey, name, {
+    "ok": True,
+    **data, "note": "decoded_no_location"
+  })
 
 
 # =========================
 # Parsing: MeshCore-ish payloads
 # =========================
+
 
 def _device_id_from_topic(topic: str) -> Optional[str]:
   parts = topic.split("/")
@@ -725,7 +772,9 @@ def _device_id_from_topic(topic: str) -> Optional[str]:
   return None
 
 
-def _find_packet_blob(obj: Any, path: str = "root") -> Tuple[Optional[str], Optional[str], Optional[str]]:
+def _find_packet_blob(
+    obj: Any,
+    path: str = "root") -> Tuple[Optional[str], Optional[str], Optional[str]]:
   if isinstance(obj, str):
     if _looks_like_hex(obj):
       return (obj.strip(), path, "hex")
@@ -735,7 +784,7 @@ def _find_packet_blob(obj: Any, path: str = "root") -> Tuple[Optional[str], Opti
     return (None, None, None)
 
   if isinstance(obj, list):
-    if obj and all(isinstance(x, int) for x in obj[: min(20, len(obj))]):
+    if obj and all(isinstance(x, int) for x in obj[:min(20, len(obj))]):
       try:
         raw = bytes(obj)
         if len(raw) >= 10:
@@ -761,7 +810,8 @@ def _find_packet_blob(obj: Any, path: str = "root") -> Tuple[Optional[str], Opti
         b64hex = _try_base64_to_hex(v)
         if b64hex:
           return (b64hex, sub_path, "base64")
-      if isinstance(v, list) and v and all(isinstance(x, int) for x in v[: min(20, len(v))]):
+      if isinstance(v, list) and v and all(
+          isinstance(x, int) for x in v[:min(20, len(v))]):
         try:
           raw = bytes(v)
           if len(raw) >= 10:
@@ -776,11 +826,13 @@ def _find_packet_blob(obj: Any, path: str = "root") -> Tuple[Optional[str], Opti
   return (None, None, None)
 
 
-def _extract_device_id(obj: Any, topic: str, decoded_pubkey: Optional[str]) -> str:
+def _extract_device_id(obj: Any, topic: str,
+                       decoded_pubkey: Optional[str]) -> str:
   if decoded_pubkey:
     return str(decoded_pubkey)
   if isinstance(obj, dict):
-    device_id = obj.get("device_id") or obj.get("id") or obj.get("from") or obj.get("origin_id")
+    device_id = obj.get("device_id") or obj.get("id") or obj.get(
+      "from") or obj.get("origin_id")
     if device_id:
       return str(device_id)
     jwt = obj.get("jwt_payload")
@@ -789,7 +841,9 @@ def _extract_device_id(obj: Any, topic: str, decoded_pubkey: Optional[str]) -> s
   return _device_id_from_topic(topic) or topic.split("/")[-1]
 
 
-def _try_parse_payload(topic: str, payload_bytes: bytes) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+def _try_parse_payload(
+    topic: str,
+    payload_bytes: bytes) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
   debug: Dict[str, Any] = {
     "result": "no_coords",
     "found_path": None,
@@ -822,8 +876,10 @@ def _try_parse_payload(topic: str, payload_bytes: bytes) -> Tuple[Optional[Dict[
         debug["device_name"] = _extract_device_name(obj, topic)
         debug["device_role"] = _extract_device_role(obj, topic)
         debug["direction"] = obj.get("direction")
-        debug["packet_hash"] = obj.get("hash") or obj.get("message_hash") or obj.get("messageHash")
-        debug["packet_type"] = obj.get("packet_type") or obj.get("packetType") or obj.get("type")
+        debug["packet_hash"] = obj.get("hash") or obj.get(
+          "message_hash") or obj.get("messageHash")
+        debug["packet_type"] = obj.get("packet_type") or obj.get(
+          "packetType") or obj.get("type")
     except Exception as exc:
       debug["parse_error"] = str(exc)
 
@@ -881,7 +937,8 @@ def _try_parse_payload(topic: str, payload_bytes: bytes) -> Tuple[Optional[Dict[
           if not _direct_coords_allowed(topic, obj):
             debug["result"] = "direct_blocked"
             return (None, debug)
-          if not DIRECT_COORDS_ALLOW_ZERO and _coords_are_zero(got2[0], got2[1]):
+          if not DIRECT_COORDS_ALLOW_ZERO and _coords_are_zero(
+              got2[0], got2[1]):
             debug["result"] = "direct_zero_coords"
             return (None, debug)
           device_id = _extract_device_id(obj, topic, None)
@@ -915,7 +972,8 @@ def _try_parse_payload(topic: str, payload_bytes: bytes) -> Tuple[Optional[Dict[
           "name": name,
           "role": debug.get("device_role"),
         }, debug)
-      debug["result"] = "decoded_no_location" if meta.get("ok") else "decode_failed"
+      debug["result"] = "decoded_no_location" if meta.get(
+        "ok") else "decode_failed"
       return (None, debug)
 
     debug["result"] = "json_no_packet_blob"
@@ -956,7 +1014,8 @@ def _try_parse_payload(topic: str, payload_bytes: bytes) -> Tuple[Optional[Dict[
           "name": name,
           "role": debug.get("device_role"),
         }, debug)
-      debug["result"] = "decoded_no_location" if meta.get("ok") else "decode_failed"
+      debug["result"] = "decoded_no_location" if meta.get(
+        "ok") else "decode_failed"
       return (None, debug)
 
     b64hex = _try_base64_to_hex(text)
@@ -977,13 +1036,15 @@ def _try_parse_payload(topic: str, payload_bytes: bytes) -> Tuple[Optional[Dict[
           "name": name,
           "role": debug.get("device_role"),
         }, debug)
-      debug["result"] = "decoded_no_location" if meta.get("ok") else "decode_failed"
+      debug["result"] = "decoded_no_location" if meta.get(
+        "ok") else "decode_failed"
       return (None, debug)
 
   if _is_probably_binary(payload_bytes) and len(payload_bytes) >= 10:
     debug["found_path"] = "payload_bytes"
     debug["found_hint"] = "raw_bytes"
-    lat, lon, decoded_pubkey, name, meta = _decode_meshcore_hex(payload_bytes.hex())
+    lat, lon, decoded_pubkey, name, meta = _decode_meshcore_hex(
+      payload_bytes.hex())
     debug["decoded_pubkey"] = decoded_pubkey
     debug["decoder_meta"] = meta
     _apply_meta_role(debug, meta)
@@ -997,7 +1058,8 @@ def _try_parse_payload(topic: str, payload_bytes: bytes) -> Tuple[Optional[Dict[
         "name": name,
         "role": debug.get("device_role"),
       }, debug)
-    debug["result"] = "decoded_no_location" if meta.get("ok") else "decode_failed"
+    debug["result"] = "decoded_no_location" if meta.get(
+      "ok") else "decode_failed"
     return (None, debug)
 
   return (None, debug)
