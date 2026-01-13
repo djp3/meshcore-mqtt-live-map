@@ -6,13 +6,24 @@ import time
 import subprocess
 from datetime import datetime, timezone
 from dataclasses import asdict
-from typing import Any, Dict, Optional, Set, List
+from typing import Any, Dict, Optional, Set, List, Tuple
 
 import httpx
 import paho.mqtt.client as mqtt
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import (
+  FastAPI,
+  WebSocket,
+  WebSocketDisconnect,
+  Request,
+  HTTPException,
+  Query,
+)
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from urllib.parse import urlencode
+from io import BytesIO
+from PIL import Image, ImageDraw
+import math
 
 import state
 from decoder import (
@@ -626,12 +637,14 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
       if now - last_sent >= MQTT_SEEN_BROADCAST_MIN_SECONDS:
         last_seen_broadcast[dev_guess] = now
         loop.call_soon_threadsafe(
-          update_queue.put_nowait, {
+          update_queue.put_nowait,
+          {
             "type": "device_seen",
             "device_id": dev_guess,
             "last_seen_ts": now,
             "mqtt_seen_ts": now,
-          })
+          },
+        )
 
   parsed, debug = _try_parse_payload(msg.topic, msg.payload)
   device_id_hint = parsed.get("device_id") if parsed else None
@@ -642,11 +655,14 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
     debug["result"] = "filtered_radius"
     parsed = None
     if device_id_hint:
-      loop.call_soon_threadsafe(update_queue.put_nowait, {
-        "type": "device_remove",
-        "device_id": device_id_hint,
-        "reason": "radius",
-      })
+      loop.call_soon_threadsafe(
+        update_queue.put_nowait,
+        {
+          "type": "device_remove",
+          "device_id": device_id_hint,
+          "reason": "radius",
+        },
+      )
   origin_id = debug.get("origin_id") or _device_id_from_topic(msg.topic)
   decoder_meta = debug.get("decoder_meta") or {}
   result = debug.get("result") or "unknown"
@@ -654,8 +670,8 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   role_target_id = origin_id
   if device_role and result.startswith("decoded"):
     role_target_id = None
-    loc_meta = decoder_meta.get("location") if isinstance(decoder_meta,
-                                                          dict) else None
+    loc_meta = (decoder_meta.get("location")
+                if isinstance(decoder_meta, dict) else None)
     loc_pubkey = loc_meta.get("pubkey") if isinstance(loc_meta, dict) else None
     if isinstance(loc_pubkey, str) and loc_pubkey.strip():
       role_target_id = loc_pubkey
@@ -702,10 +718,13 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
       if device_state:
         device_state.name = device_name
         loop: asyncio.AbstractEventLoop = userdata["loop"]
-        loop.call_soon_threadsafe(update_queue.put_nowait, {
-          "type": "device_name",
-          "device_id": origin_id,
-        })
+        loop.call_soon_threadsafe(
+          update_queue.put_nowait,
+          {
+            "type": "device_name",
+            "device_id": origin_id,
+          },
+        )
   if device_role and role_target_id:
     existing_role = device_roles.get(role_target_id)
     if existing_role != device_role:
@@ -716,10 +735,13 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
       if device_state:
         device_state.role = device_role
         loop: asyncio.AbstractEventLoop = userdata["loop"]
-        loop.call_soon_threadsafe(update_queue.put_nowait, {
-          "type": "device_role",
-          "device_id": role_target_id,
-        })
+        loop.call_soon_threadsafe(
+          update_queue.put_nowait,
+          {
+            "type": "device_role",
+            "device_id": role_target_id,
+          },
+        )
 
   path_hashes = decoder_meta.get("pathHashes")
   payload_type = decoder_meta.get("payloadType")
@@ -744,7 +766,7 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
         "origin_id": None,
         "first_rx": None,
         "receivers": set(),
-        "ts": time.time()
+        "ts": time.time(),
       }
       message_origins[message_hash] = cache
     cache["ts"] = time.time()
@@ -784,7 +806,8 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   route_emitted = False
   if route_hashes and payload_type in ROUTE_PAYLOAD_TYPES_SET:
     loop.call_soon_threadsafe(
-      update_queue.put_nowait, {
+      update_queue.put_nowait,
+      {
         "type": "route",
         "path_hashes": route_hashes,
         "payload_type": payload_type,
@@ -795,12 +818,14 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
         "route_type": route_type,
         "ts": time.time(),
         "topic": msg.topic,
-      })
+      },
+    )
     route_emitted = True
   elif message_hash and route_origin_id and receiver_id:
     if direction_value == "rx" and msg.topic.endswith("/packets"):
       loop.call_soon_threadsafe(
-        update_queue.put_nowait, {
+        update_queue.put_nowait,
+        {
           "type": "route",
           "route_mode": "fanout",
           "route_id": f"{message_hash}-{receiver_id}",
@@ -811,16 +836,19 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
           "payload_type": payload_type,
           "ts": time.time(),
           "topic": msg.topic,
-        })
+        },
+      )
       route_emitted = True
 
   if (not route_emitted and direction_value == "rx" and
       msg.topic.endswith("/packets") and receiver_id and route_origin_id and
       receiver_id != route_origin_id and
       payload_type in ROUTE_PAYLOAD_TYPES_SET):
-    fallback_id = message_hash or f"{route_origin_id}-{receiver_id}-{int(time.time() * 1000)}"
+    fallback_id = (message_hash or
+                   f"{route_origin_id}-{receiver_id}-{int(time.time() * 1000)}")
     loop.call_soon_threadsafe(
-      update_queue.put_nowait, {
+      update_queue.put_nowait,
+      {
         "type": "route",
         "route_mode": "direct",
         "route_id": f"direct-{fallback_id}",
@@ -831,7 +859,8 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
         "payload_type": payload_type,
         "ts": time.time(),
         "topic": msg.topic,
-      })
+      },
+    )
 
   if not parsed:
     stats["unparsed_total"] += 1
@@ -864,8 +893,10 @@ async def broadcaster():
   while True:
     event = await update_queue.get()
 
-    if isinstance(event,
-                  dict) and event.get("type") in ("device_name", "device_role"):
+    if isinstance(event, dict) and event.get("type") in (
+        "device_name",
+        "device_role",
+    ):
       device_id = event.get("device_id")
       device_state = devices.get(device_id)
       if device_state:
@@ -876,7 +907,7 @@ async def broadcaster():
         payload = {
           "type": "update",
           "device": _device_payload(device_id, device_state),
-          "trail": trails.get(device_id, [])
+          "trail": trails.get(device_id, []),
         }
         dead = []
         for ws in list(clients):
@@ -945,8 +976,8 @@ async def broadcaster():
       if not points and route_mode == "fanout":
         points = _route_points_from_device_ids(event.get("origin_id"),
                                                event.get("receiver_id"))
-        if points and event.get("origin_id") and event.get(
-            "receiver_id") and len(points) == 2:
+        if (points and event.get("origin_id") and event.get("receiver_id") and
+            len(points) == 2):
           point_ids = [event.get("origin_id"), event.get("receiver_id")]
 
       # Fallback: if path hashes are missing/unknown, draw a direct link when possible.
@@ -955,8 +986,8 @@ async def broadcaster():
                                                event.get("receiver_id"))
         if points:
           route_mode = "direct"
-          if event.get("origin_id") and event.get("receiver_id") and len(
-              points) == 2:
+          if (event.get("origin_id") and event.get("receiver_id") and
+              len(points) == 2):
             point_ids = [event.get("origin_id"), event.get("receiver_id")]
 
       if not points:
@@ -969,9 +1000,10 @@ async def broadcaster():
         if outside:
           continue
 
-      route_id = event.get("route_id") or event.get(
-        "message_hash"
-      ) or f"{event.get('origin_id', 'route')}-{int(event.get('ts', time.time()) * 1000)}"
+      route_id = (
+        event.get("route_id") or event.get("message_hash") or
+        f"{event.get('origin_id', 'route')}-{int(event.get('ts', time.time()) * 1000)}"
+      )
       expires_at = (event.get("ts") or time.time()) + ROUTE_TTL_SECONDS
       route = {
         "id": route_id,
@@ -1012,7 +1044,7 @@ async def broadcaster():
         if history_removed:
           history_payload_remove = {
             "type": "history_edges_remove",
-            "edge_ids": history_removed
+            "edge_ids": history_removed,
           }
         else:
           history_payload_remove = None
@@ -1029,8 +1061,8 @@ async def broadcaster():
           clients.discard(ws)
       continue
 
-    upd = event.get("data") if isinstance(
-      event, dict) and event.get("type") == "device" else event
+    upd = (event.get("data") if isinstance(event, dict) and
+           event.get("type") == "device" else event)
 
     device_id = upd["device_id"]
     if not _within_map_radius(upd.get("lat"), upd.get("lon")):
@@ -1082,7 +1114,7 @@ async def broadcaster():
     payload = {
       "type": "update",
       "device": _device_payload(device_id, device_state),
-      "trail": trails.get(device_id, [])
+      "trail": trails.get(device_id, []),
     }
 
     dead = []
@@ -1177,7 +1209,7 @@ async def reaper():
             await ws.send_text(
               json.dumps({
                 "type": "history_edges_remove",
-                "edge_ids": history_removed
+                "edge_ids": history_removed,
               }))
         except Exception:
           dead.append(ws)
@@ -1195,8 +1227,8 @@ async def reaper():
         if now - info.get("ts", 0) > MESSAGE_ORIGIN_TTL_SECONDS:
           message_origins.pop(msg_hash, None)
 
-    prune_after = max(DEVICE_TTL_SECONDS *
-                      3, 900) if DEVICE_TTL_SECONDS > 0 else 86400
+    prune_after = (max(DEVICE_TTL_SECONDS *
+                       3, 900) if DEVICE_TTL_SECONDS > 0 else 86400)
     for dev_id, last in list(seen_devices.items()):
       if now - last > prune_after:
         seen_devices.pop(dev_id, None)
@@ -1208,7 +1240,7 @@ async def reaper():
 # FastAPI routes
 # =========================
 @app.get("/")
-def root():
+def root(request: Request):
   html_path = os.path.join(APP_DIR, "static", "index.html")
   try:
     with open(html_path, "r", encoding="utf-8") as handle:
@@ -1216,9 +1248,76 @@ def root():
   except Exception:
     return FileResponse("static/index.html")
 
+  # Check for lat/lon parameters for dynamic preview image
+  query_params = request.query_params
+  lat_param = query_params.get("lat") or query_params.get("latitude")
+  lon_param = (query_params.get("lon") or query_params.get("lng") or
+               query_params.get("long") or query_params.get("longitude"))
+  zoom_param = query_params.get("zoom")
+
   og_image_tag = ""
   twitter_image_tag = ""
-  if SITE_OG_IMAGE:
+  og_url = SITE_URL
+
+  # Generate dynamic preview image if coordinates are provided
+  if lat_param and lon_param:
+    try:
+      lat = float(lat_param)
+      lon = float(lon_param)
+      zoom = int(zoom_param) if zoom_param and zoom_param.isdigit() else 13
+      zoom = max(1, min(18, zoom))  # Clamp zoom between 1-18
+
+      # Generate preview image URL pointing to our own server
+      # Use absolute URL for better compatibility with Discord and other platforms
+      base_url = str(request.url).split("?")[0].rstrip("/")
+      preview_params = urlencode({
+        "lat": lat,
+        "lon": lon,
+        "zoom": zoom,
+        "marker": "blue",
+        "theme": "dark",
+      })
+      preview_url = f"{base_url}/preview.png?{preview_params}"
+
+      # Ensure absolute URL (use SITE_URL if available, otherwise construct from request)
+      if SITE_URL and SITE_URL.startswith("http"):
+        site_base = SITE_URL.rstrip("/")
+        preview_url = f"{site_base}/preview.png?{preview_params}"
+      elif not preview_url.startswith("http"):
+        # Fallback: construct from request
+        scheme = request.url.scheme
+        host = request.headers.get("host", request.url.hostname or "localhost")
+        preview_url = f"{scheme}://{host}/preview.png?{preview_params}"
+
+      safe_image = html.escape(preview_url, quote=True)
+      # Add image dimensions for better Discord/social media compatibility
+      # Note: Preview image may fail if container can't reach external services
+      # In that case, fall back to static SITE_OG_IMAGE if available
+      og_image_tag = (
+        f'<meta property="og:image" content="{safe_image}" />\n'
+        f'  <meta property="og:image:width" content="1200" />\n'
+        f'  <meta property="og:image:height" content="630" />\n'
+        f'  <meta property="og:image:type" content="image/png" />')
+      twitter_image_tag = f'<meta name="twitter:image" content="{safe_image}" />'
+
+      # If static image is configured, add it as a fallback
+      if SITE_OG_IMAGE:
+        safe_static_image = html.escape(str(SITE_OG_IMAGE), quote=True)
+        og_image_tag += f'\n  <meta property="og:image:secure_url" content="{safe_static_image}" />'
+
+      # Update og:url to include query parameters
+      base_url = str(request.url).split("?")[0]
+      og_url = f"{base_url}?lat={lat}&lon={lon}"
+      if zoom_param:
+        og_url += f"&zoom={zoom}"
+    except (ValueError, TypeError):
+      # Invalid coordinates, fall back to static image
+      if SITE_OG_IMAGE:
+        safe_image = html.escape(str(SITE_OG_IMAGE), quote=True)
+        og_image_tag = f'<meta property="og:image" content="{safe_image}" />'
+        twitter_image_tag = (
+          f'<meta name="twitter:image" content="{safe_image}" />')
+  elif SITE_OG_IMAGE:
     safe_image = html.escape(str(SITE_OG_IMAGE), quote=True)
     og_image_tag = f'<meta property="og:image" content="{safe_image}" />'
     twitter_image_tag = f'<meta name="twitter:image" content="{safe_image}" />'
@@ -1230,13 +1329,16 @@ def root():
   if TRAIL_LEN > 0:
     trail_info_suffix = f" Trails show last ~{TRAIL_LEN} points."
 
+  # Escape og_url for HTML
+  SAFE_OG_URL = html.escape(str(og_url), quote=True)
+
   replacements = {
     "SITE_TITLE":
       SITE_TITLE,
     "SITE_DESCRIPTION":
       SITE_DESCRIPTION,
     "SITE_URL":
-      SITE_URL,
+      SAFE_OG_URL,
     "SITE_ICON":
       SITE_ICON,
     "SITE_FEED_NOTE":
@@ -1297,21 +1399,311 @@ def root():
   return HTMLResponse(content)
 
 
+@app.get("/preview.png")
+async def preview_image(
+    lat: Optional[float] = Query(None, alias="lat"),
+    lon: Optional[float] = Query(None, alias="lon"),
+    zoom: Optional[int] = Query(13, alias="zoom"),
+    marker: Optional[str] = Query("blue", alias="marker"),
+    theme: Optional[str] = Query("dark", alias="theme"),
+):
+  """
+    Generate a preview image of the map with a pin marker at the specified coordinates.
+    Returns a PNG image suitable for Open Graph/Twitter card previews.
+
+    Marker options:
+    - red-pin, blue-pin, green-pin, yellow-pin, orange-pin, purple-pin, black-pin, white-pin
+    - red, blue, green, yellow, orange, purple, black, white (simple circle markers)
+    - Custom format: color-pin or color (e.g., "blue-pin", "green")
+    """
+  if lat is None or lon is None:
+    # Return a default/error image if coordinates not provided
+    return Response(content=b"", status_code=400, media_type="image/png")
+
+  try:
+    zoom_val = max(1, min(18, int(zoom) if zoom else 14))
+
+    # Image dimensions for social media previews (Open Graph standard)
+    width = 1200
+    height = 630
+
+    # Validate and sanitize marker option
+    marker_str = str(marker).lower().strip() if marker else "blue"
+    if not marker_str or marker_str == "none":
+      marker_str = "blue"
+
+    # Validate theme option (light or dark)
+    theme_str = str(theme).lower().strip() if theme else "dark"
+    if theme_str not in ("light", "dark"):
+      theme_str = "dark"
+
+    # Generate map image server-side using OSM tiles
+    try:
+      # Convert lat/lon to tile coordinates
+      def deg2num(lat_deg, lon_deg, zoom_level):
+        lat_rad = math.radians(lat_deg)
+        n = 2.0**zoom_level
+        xtile = int((lon_deg + 180.0) / 360.0 * n)
+        ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+        return (xtile, ytile)
+
+      def num2deg(xtile, ytile, zoom_level):
+        n = 2.0**zoom_level
+        lon_deg = xtile / n * 360.0 - 180.0
+        lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * ytile / n)))
+        lat_deg = math.degrees(lat_rad)
+        return (lat_deg, lon_deg)
+
+      # Calculate which tiles we need
+      center_tile_x, center_tile_y = deg2num(lat, lon, zoom_val)
+      tile_size = 256
+      tiles_x = math.ceil(width / tile_size) + 2
+      tiles_y = math.ceil(height / tile_size) + 2
+
+      # Calculate pixel position of center point within its tile
+      # Get the northwest corner of the center tile
+      nw_lat, nw_lon = num2deg(center_tile_x, center_tile_y, zoom_val)
+      # Get the southeast corner of the center tile
+      se_lat, se_lon = num2deg(center_tile_x + 1, center_tile_y + 1, zoom_val)
+
+      # Calculate pixel offset within the center tile
+      center_tile_pixel_x = int((lon - nw_lon) / (se_lon - nw_lon) * tile_size)
+      center_tile_pixel_y = int((nw_lat - lat) / (nw_lat - se_lat) * tile_size)
+
+      # Calculate which tiles to fetch
+      start_tile_x = center_tile_x - tiles_x // 2
+      start_tile_y = center_tile_y - tiles_y // 2
+
+      # Create blank image with theme-appropriate background
+      bg_color = ((18, 18, 18) if theme_str == "dark" else
+                  (242, 239, 233))  # Dark or light background
+      final_image = Image.new("RGB", (width, height), bg_color)
+
+      # Fetch and composite tiles
+      tiles_fetched = 0
+      tiles_failed = 0
+      async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+        for ty in range(tiles_y):
+          for tx in range(tiles_x):
+            tile_x = start_tile_x + tx
+            tile_y = start_tile_y + ty
+
+            # Use theme-appropriate tile server
+            if theme_str == "dark":
+              # CartoDB Dark Matter tiles
+              tile_url = f"https://a.basemaps.cartocdn.com/dark_all/{zoom_val}/{tile_x}/{tile_y}.png"
+            else:
+              # Standard OSM light tiles
+              tile_url = f"https://tile.openstreetmap.org/{zoom_val}/{tile_x}/{tile_y}.png"
+
+            try:
+              response = await client.get(tile_url)
+              if response.status_code == 200:
+                tile_img = Image.open(BytesIO(response.content))
+                # Calculate position: center the marker at the center of the image
+                # The center tile should place the marker at the center pixel position
+                x_offset = ((tx - tiles_x // 2) * tile_size + width // 2 -
+                            center_tile_pixel_x)
+                y_offset = ((ty - tiles_y // 2) * tile_size + height // 2 -
+                            center_tile_pixel_y)
+                final_image.paste(
+                  tile_img,
+                  (x_offset, y_offset),
+                  tile_img if tile_img.mode == "RGBA" else None,
+                )
+                tiles_fetched += 1
+              else:
+                tiles_failed += 1
+                print(
+                  f"[preview] Tile {tile_x}/{tile_y} returned status {response.status_code}"
+                )
+            except Exception as tile_error:
+              tiles_failed += 1
+              print(
+                f"[preview] Failed to fetch tile {tile_x}/{tile_y} from {tile_url}: {tile_error}"
+              )
+              continue
+
+      print(f"[preview] Fetched {tiles_fetched} tiles, {tiles_failed} failed")
+
+      # Draw current devices (all in-bounds, no cap)
+      def latlon_to_global_px(lat_deg: float, lon_deg: float,
+                              zoom_level: int) -> Tuple[float, float]:
+        lat_rad = math.radians(lat_deg)
+        n = 2.0**zoom_level
+        x_px = (lon_deg + 180.0) / 360.0 * n * tile_size
+        y_px = ((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n *
+                tile_size)
+        return (x_px, y_px)
+
+      draw = ImageDraw.Draw(final_image)
+      center_px_x, center_px_y = latlon_to_global_px(lat, lon, zoom_val)
+      node_radius = 5
+      node_color = (86, 198, 255) if theme_str == "dark" else (25, 83, 170)
+      node_outline = (15, 15, 15) if theme_str == "dark" else (255, 255, 255)
+      for state in list(devices.values()):
+        try:
+          dev_lat = float(state.lat)
+          dev_lon = float(state.lon)
+        except Exception:
+          continue
+        if _coords_are_zero(
+            dev_lat, dev_lon) or not _within_map_radius(dev_lat, dev_lon):
+          continue
+        dev_px_x, dev_px_y = latlon_to_global_px(dev_lat, dev_lon, zoom_val)
+        img_x = width / 2 + (dev_px_x - center_px_x)
+        img_y = height / 2 + (dev_px_y - center_px_y)
+        if (img_x < -node_radius or img_x > width + node_radius or
+            img_y < -node_radius or img_y > height + node_radius):
+          continue
+        draw.ellipse(
+          [
+            (img_x - node_radius, img_y - node_radius),
+            (img_x + node_radius, img_y + node_radius),
+          ],
+          fill=node_color,
+          outline=node_outline,
+          width=2,
+        )
+
+      # Draw marker
+      marker_color_map = {
+        "red": (220, 53, 69),
+        "blue": (0, 123, 255),
+        "green": (40, 167, 69),
+        "yellow": (255, 193, 7),
+        "orange": (255, 152, 0),
+        "purple": (108, 117, 125),
+        "black": (0, 0, 0),
+        "white": (255, 255, 255),
+      }
+      marker_color = marker_color_map.get(marker_str,
+                                          (0, 123, 255))  # Default to blue
+
+      # Calculate marker position (center of image)
+      marker_x = width // 2
+      marker_y = height // 2
+
+      # Draw a circle marker
+      marker_radius = 12
+      draw.ellipse(
+        [
+          (marker_x - marker_radius, marker_y - marker_radius),
+          (marker_x + marker_radius, marker_y + marker_radius),
+        ],
+        fill=marker_color,
+        outline=(255, 255, 255),
+        width=2,
+      )
+
+      # Convert to PNG bytes
+      img_bytes = BytesIO()
+      final_image.save(img_bytes, format="PNG")
+      img_bytes.seek(0)
+
+      return Response(
+        content=img_bytes.getvalue(),
+        media_type="image/png",
+        headers={
+          "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+        },
+      )
+
+    except Exception as e:
+      print(f"[preview] Error generating map image: {e}")
+      import traceback
+
+      traceback.print_exc()
+
+      # Even if tile fetching fails, try to return a simple map with marker
+      try:
+        bg_color = (18, 18, 18) if theme_str == "dark" else (242, 239, 233)
+        fallback_image = Image.new("RGB", (width, height), bg_color)
+        draw = ImageDraw.Draw(fallback_image)
+
+        # Draw marker
+        marker_color_map = {
+          "red": (220, 53, 69),
+          "blue": (0, 123, 255),
+          "green": (40, 167, 69),
+          "yellow": (255, 193, 7),
+          "orange": (255, 152, 0),
+          "purple": (108, 117, 125),
+          "black": (0, 0, 0),
+          "white": (255, 255, 255),
+        }
+        marker_color = marker_color_map.get(marker_str, (0, 123, 255))
+        marker_x = width // 2
+        marker_y = height // 2
+        marker_radius = 12
+        draw.ellipse(
+          [
+            (marker_x - marker_radius, marker_y - marker_radius),
+            (marker_x + marker_radius, marker_y + marker_radius),
+          ],
+          fill=marker_color,
+          outline=(255, 255, 255),
+          width=2,
+        )
+
+        img_bytes = BytesIO()
+        fallback_image.save(img_bytes, format="PNG")
+        img_bytes.seek(0)
+
+        print(
+          f"[preview] Returning fallback image with marker (tile fetch failed)")
+        return Response(
+          content=img_bytes.getvalue(),
+          media_type="image/png",
+          headers={"Cache-Control": "public, max-age=300"},
+        )
+      except Exception as fallback_error:
+        print(
+          f"[preview] Fallback image generation also failed: {fallback_error}")
+        # Only redirect to static image if even fallback fails
+        if SITE_OG_IMAGE and SITE_OG_IMAGE.startswith("http"):
+          from fastapi.responses import RedirectResponse
+
+          print(
+            f"[preview] All image generation failed, redirecting to static OG image: {SITE_OG_IMAGE}"
+          )
+          return RedirectResponse(url=SITE_OG_IMAGE, status_code=302)
+
+        # Return transparent PNG as last resort
+        transparent_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xdb\x00\x00\x00\x00IEND\xaeB`\x82"
+        return Response(
+          content=transparent_png,
+          media_type="image/png",
+          headers={"Cache-Control": "public, max-age=300"},
+        )
+  except Exception as e:
+    # Log error for debugging
+    print(f"[preview] Error generating preview image: {e}")
+    import traceback
+
+    traceback.print_exc()
+    # Return empty image on error
+    return Response(content=b"", status_code=500, media_type="image/png")
+
+
 @app.get("/manifest.webmanifest")
 def manifest():
   icons = []
   if SITE_ICON:
-    icons = [{
-      "src": SITE_ICON,
-      "sizes": "192x192",
-      "type": "image/png",
-      "purpose": "any"
-    }, {
-      "src": SITE_ICON,
-      "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "any maskable"
-    }]
+    icons = [
+      {
+        "src": SITE_ICON,
+        "sizes": "192x192",
+        "type": "image/png",
+        "purpose": "any",
+      },
+      {
+        "src": SITE_ICON,
+        "sizes": "512x512",
+        "type": "image/png",
+        "purpose": "any maskable",
+      },
+    ]
   short_name = SITE_TITLE if len(SITE_TITLE) <= 12 else SITE_TITLE[:12]
   return JSONResponse(
     {
@@ -1324,7 +1716,7 @@ def manifest():
       "display_override": ["standalone", "minimal-ui"],
       "background_color": "#0f172a",
       "theme_color": "#0f172a",
-      "icons": icons
+      "icons": icons,
     },
     media_type="application/manifest+json",
   )
@@ -1413,10 +1805,12 @@ def get_stats():
 
 
 @app.get("/api/nodes")
-def api_nodes(request: Request,
-              updated_since: Optional[str] = None,
-              mode: Optional[str] = None,
-              format: Optional[str] = None):
+def api_nodes(
+  request: Request,
+  updated_since: Optional[str] = None,
+  mode: Optional[str] = None,
+  format: Optional[str] = None,
+):
   _require_prod_token(request)
   cutoff = _parse_updated_since(updated_since)
   mode_value = (mode or "").strip().lower()
@@ -1463,8 +1857,8 @@ def get_peers(device_id: str, request: Request, limit: int = 8):
   if state and not _coords_are_zero(state.lat, state.lon):
     payload["lat"] = float(state.lat)
     payload["lon"] = float(state.lon)
-  payload["name"] = (state.name
-                     if state else None) or device_names.get(device_id) or ""
+  payload["name"] = ((state.name if state else None) or
+                     device_names.get(device_id) or "")
   payload["role"] = (state.role
                      if state else None) or device_roles.get(device_id)
   payload["last_seen_ts"] = seen_devices.get(device_id) or (state.ts
@@ -1642,7 +2036,7 @@ async def get_coverage():
     raise HTTPException(
       status_code=503,
       detail=
-      "coverage_api_not_configured: Set COVERAGE_API_URL in .env (e.g., http://localhost:3000)"
+      "coverage_api_not_configured: Set COVERAGE_API_URL in .env (e.g., http://localhost:3000)",
     )
   try:
     url = f"{COVERAGE_API_URL}/get-samples"
@@ -1652,8 +2046,8 @@ async def get_coverage():
       response.raise_for_status()
       data = response.json()
       # /get-samples returns { keys: [...] }, extract the keys array
-      samples = data.get("keys", []) if isinstance(
-        data, dict) else (data if isinstance(data, list) else [])
+      samples = (data.get("keys", []) if isinstance(data, dict) else
+                 (data if isinstance(data, list) else []))
       print(
         f"[coverage] Received {len(samples) if isinstance(samples, list) else 'non-list'} items from coverage API"
       )
@@ -1668,7 +2062,7 @@ async def get_coverage():
     raise HTTPException(
       status_code=502,
       detail=
-      f"coverage_api_error: HTTP {e.response.status_code} from {COVERAGE_API_URL}"
+      f"coverage_api_error: HTTP {e.response.status_code} from {COVERAGE_API_URL}",
     )
   except httpx.HTTPError as e:
     raise HTTPException(status_code=502, detail=f"coverage_api_error: {str(e)}")
@@ -1752,7 +2146,7 @@ async def startup():
 
   topics_str = ", ".join(MQTT_TOPICS)
   print(
-    f"[mqtt] connecting host={MQTT_HOST} port={MQTT_PORT} tls={MQTT_TLS} transport={transport} ws_path={MQTT_WS_PATH if transport=='websockets' else '-'} topics={topics_str}"
+    f"[mqtt] connecting host={MQTT_HOST} port={MQTT_PORT} tls={MQTT_TLS} transport={transport} ws_path={MQTT_WS_PATH if transport == 'websockets' else '-'} topics={topics_str}"
   )
 
   mqtt_client = mqtt.Client(
