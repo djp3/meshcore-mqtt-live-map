@@ -454,15 +454,20 @@ def _route_points_from_hashes(
     origin_state = devices.get(origin_id)
     if origin_state and not _coords_are_zero(origin_state.lat,
                                              origin_state.lon):
-      try:
-        origin_point = [float(origin_state.lat), float(origin_state.lon)]
-        if not points or points[0] != origin_point:
-          points.insert(0, origin_point)
-          point_ids.insert(0, origin_id)
-        elif point_ids:
-          point_ids[0] = origin_id
-      except (TypeError, ValueError):
-        pass
+      # If infrastructure-only, only add infra nodes
+      if ROUTE_INFRA_ONLY and (not origin_state.role or
+                               origin_state.role not in ("repeater", "room")):
+        pass  # skip
+      else:
+        try:
+          origin_point = [float(origin_state.lat), float(origin_state.lon)]
+          if not points or points[0] != origin_point:
+            points.insert(0, origin_point)
+            point_ids.insert(0, origin_id)
+          elif point_ids:
+            point_ids[0] = origin_id
+        except (TypeError, ValueError):
+          pass
 
   # Append receiver if missing
   receiver_point = None
@@ -470,15 +475,23 @@ def _route_points_from_hashes(
     receiver_state = devices.get(receiver_id)
     if receiver_state and not _coords_are_zero(receiver_state.lat,
                                                receiver_state.lon):
-      try:
-        receiver_point = [float(receiver_state.lat), float(receiver_state.lon)]
-        if points and receiver_point != points[-1]:
-          points.append(receiver_point)
-          point_ids.append(receiver_id)
-        elif point_ids:
-          point_ids[-1] = receiver_id
-      except (TypeError, ValueError):
-        pass
+      # If infrastructure-only, only add infra nodes
+      if ROUTE_INFRA_ONLY and (not receiver_state.role or
+                               receiver_state.role not in ("repeater", "room")):
+        pass  # skip
+      else:
+        try:
+          receiver_point = [
+            float(receiver_state.lat),
+            float(receiver_state.lon),
+          ]
+          if points and receiver_point != points[-1]:
+            points.append(receiver_point)
+            point_ids.append(receiver_id)
+          elif point_ids:
+            point_ids[-1] = receiver_id
+        except (TypeError, ValueError):
+          pass
 
   if len(points) < 2:
     return None, used_hashes, point_ids
