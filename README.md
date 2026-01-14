@@ -1,6 +1,6 @@
 # Mesh Live Map
 
-Version: `1.0.3` (see [VERSIONS.md](VERSIONS.md))
+Version: `1.0.7` (see [VERSIONS.md](VERSIONS.md))
 
 Live MeshCore traffic map that renders nodes, routes, and activity in real time on a Leaflet map. The backend subscribes to MQTT over WebSockets + TLS, decodes MeshCore packets with `@michaelhart/meshcore-decoder`, and streams updates to the browser via WebSockets.
 
@@ -21,7 +21,7 @@ Live example sites:
 - Heat map for the last 10 minutes of message activity (includes adverts)
 - Persistent device state and optional trails (disable with `TRAIL_LEN=0`)
 - 24-hour route history tool with volume-based coloring, click-to-view packet details, a heat-band slider, and a link-size slider
-- Peers tool showing incoming/outgoing neighbors with on-map lines
+- Peers tool showing incoming/outgoing neighbors with on-map lines (blue = incoming, purple = outgoing)
 - Coverage layer from a coverage map API (button hidden when not configured)
 - Update available banner (git local vs upstream) with dismiss
 - UI controls: legend toggle, dark map, topo map, units toggle (km/mi), labels toggle, hide nodes, heat toggle
@@ -31,7 +31,9 @@ Live example sites:
 - Adjustable node size slider (defaults from env, saves locally)
 - LOS tool with elevation profile + peak markers and hover sync (Shift+click or long‑press nodes)
 - Embeddable metadata (Open Graph/Twitter tags) driven by env vars
-- Propagation panel lives on the right and keeps the last render until you generate a new one
+- Preview image renders in-bounds device dots for shared links
+- Route pruning via neighbor-aware closest-hop selection + max hop distance (configurable)
+- Propagation panel lives on the right and keeps the last render until you generate a new one (click an origin marker to remove it)
 - Installable PWA (manifest + service worker) for Add to Home Screen
 - Click the logo to hide/show the left HUD panel while tools stay open
 
@@ -74,6 +76,7 @@ Debugging:
 
 Storage + server:
 - `STATE_DIR` (persisted state path)
+- `NEIGHBOR_OVERRIDES_FILE` (optional JSON mapping for neighbor overrides)
 - `STATE_SAVE_INTERVAL` (seconds between state saves)
 - `WEB_PORT` (host port for the web UI)
 - `PROD_MODE` (true to require a token for API + WS)
@@ -109,6 +112,8 @@ Device + route tuning:
 - `ROUTE_TTL_SECONDS`
 - `ROUTE_PATH_MAX_LEN` (skip oversized path-hash lists)
 - `ROUTE_PAYLOAD_TYPES` (packet types used for live routes)
+- `ROUTE_MAX_HOP_DISTANCE` (km; prunes unrealistic hops)
+- `ROUTE_INFRA_ONLY` (true = only repeaters/rooms in route lines)
 - `MESSAGE_ORIGIN_TTL_SECONDS`
 
 History overlay:
@@ -179,7 +184,7 @@ Use it:
 - URL params override stored settings: `lat`, `lon`/`lng`/`long`, `zoom`, `layer`, `history`, `heat`, `labels`, `nodes`, `legend`, `menu`, `units`, `history_filter`.
 - Dark map also darkens node popups for readability.
 - Route styling uses payload type: 2/5 = Message (blue), 8/9 = Trace (orange), 4 = Advert (green).
-- If hop hashes collide, the backend skips those hashes (unique-only mapping).
+- If hop hashes collide, the backend prefers known neighbors (or overrides) before picking the closest hop and pruning beyond `ROUTE_MAX_HOP_DISTANCE`.
 - Coordinates at `0,0` (including string values) are filtered from devices, trails, and routes.
 
 ## API

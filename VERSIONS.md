@@ -1,5 +1,28 @@
 # Versions
 
+## v1.0.7 (01-14-2026)
+- Route hash collisions now prefer known neighbor pairs before falling back to closest-hop selection.
+- Add optional neighbor override map via `NEIGHBOR_OVERRIDES_FILE` (default `data/neighbor_overrides.json`).
+- Neighbor edges auto-expire using `DEVICE_TTL_SECONDS` to prevent stale adjacency picks.
+
+## v1.0.6 (01-13-2026)
+- Peers panel now labels line colors (blue = incoming, purple = outgoing).
+- Propagation origins can be removed individually by clicking their markers.
+- HUD scrollbars styled in Chromium for a cleaner look.
+- Bump PWA cache version to force asset refresh.
+- Suggestions from Zaos.
+
+## v1.0.5 (01-13-2026)
+- Resolve short-hash collisions by choosing the closest node in the route chain (credit: https://github.com/sefator)
+- Drop hops that exceed `ROUTE_MAX_HOP_DISTANCE` to avoid unrealistic jumps
+- Add `ROUTE_INFRA_ONLY` to restrict route lines to repeaters/rooms
+- Document new route env defaults in `.env.example`
+
+## v1.0.4 (01-13-2026)
+- Open Graph preview URL no longer double-slashes the `/preview.png` path (credit: https://github.com/chrisdavis2110)
+- Preview image now renders in-bounds device dots (not just the center pin; credit: https://github.com/chrisdavis2110)
+- Fix preview renderer NameError by importing `Tuple`
+
 ## v1.0.3 (01-12-2026)
 - Fix route decoding to return the correct tuple when paths exceed max length (credit: https://github.com/sefator)
 

@@ -1,5 +1,7 @@
 # Repository Guidelines
 
+Current version: `1.0.7` (see `VERSIONS.md`).
+
 ## Project Structure & Module Organization
 - `backend/app.py` wires FastAPI routes, MQTT lifecycle, and websocket broadcast flow.
 - `backend/config.py` centralizes env configuration.
@@ -13,9 +15,9 @@
 - `backend/static/sw.js` is the PWA service worker.
 - `backend/requirements.txt` and `backend/Dockerfile` define Python and Node dependencies.
 - `docker-compose.yaml` runs the service as `meshmap-live`.
-- `data/` stores persisted state (`state.json`), route history (`route_history.jsonl`), and optional role overrides (`device_roles.json`).
+- `data/` stores persisted state (`state.json`), route history (`route_history.jsonl`), role overrides (`device_roles.json`), and optional neighbor overrides (`neighbor_overrides.json`).
 - `.env` holds dev runtime settings; `.env.example` mirrors template defaults.
-- `VERSION.txt` tracks the current version; append changes in `VERSIONS.md`.
+- `VERSION.txt` tracks the current version (now `1.0.7`); append changes in `VERSIONS.md`.
 
 ## Build, Test, and Development Commands
 - `docker compose up -d --build` rebuilds and restarts the backend (preferred workflow).
@@ -47,6 +49,7 @@
 - `MAP_RADIUS_SHOW=true` draws a debug circle centered on `MAP_START_LAT/LON`.
 - Set `TRAIL_LEN=0` to disable trails entirely; the HUD trail hint is removed when trails are off.
 - Coverage button only appears when `COVERAGE_API_URL` is set.
+- `NEIGHBOR_OVERRIDES_FILE` can point at a JSON map/list of neighbor pairs to resolve hash collisions.
 - Optional custom HUD link appears when `CUSTOM_LINK_URL` is set.
 - Update banner uses `GIT_CHECK_ENABLED` (compare local vs upstream) with `GIT_CHECK_PATH` pointing at a git repo.
 - `GIT_CHECK_FETCH` controls whether the server fetches before comparing; `GIT_CHECK_INTERVAL_SECONDS` sets the recheck interval.
@@ -59,7 +62,9 @@
 ## Feature Notes
 - MQTT is WSS/TLS with meshcore-decoder in a Node helper for advert/location parsing.
 - Routes are rendered as trace/message/advert lines with TTL cleanup; 0,0 coords (including stringy zeros) are filtered from trails/routes.
-- Route hash collisions are ignored (unique-only mapping); long path lists are skipped via `ROUTE_PATH_MAX_LEN`.
+- Route hash collisions prefer known neighbors (and optional overrides); long path lists are skipped via `ROUTE_PATH_MAX_LEN`.
+- Route collisions fall back to closest-hop selection and drop hops beyond `ROUTE_MAX_HOP_DISTANCE`.
+- `ROUTE_INFRA_ONLY` restricts route lines to repeaters/rooms (companions still show as markers).
 - Heatmap shows recent traffic points (TTL controlled).
 - LOS tool runs **server-side only** via `/los`, returning the elevation profile + peaks.
 - LOS UI includes peak markers, a relay suggestion marker, elevation profile hover, and map-line hover sync.
@@ -78,6 +83,7 @@
 - History tool opens a right-side panel with a 5-step heat filter slider: All, Blue, Yellow, Yellow+Red, Red; legend swatch hides unless active.
 - History records routes for `path`, `direct`, and `fanout` modes by default; adjust with `ROUTE_HISTORY_ALLOWED_MODES`.
 - Propagation render stays visible until a new render; origin changes only mark it dirty.
+- Preview image endpoint renders in-bounds device dots for shared links.
 - Peers tool opens a right-side panel showing incoming/outgoing neighbors (counts + %) based on recent route history; selecting a node draws peer lines on the map.
 - Peers tool ignores nodes listed in `MQTT_ONLINE_FORCE_NAMES` (used for observer listeners).
 - Units toggle (km/mi) is stored in localStorage and defaults to `DISTANCE_UNITS`.

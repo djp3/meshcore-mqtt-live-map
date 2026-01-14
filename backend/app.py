@@ -6,13 +6,24 @@ import time
 import subprocess
 from datetime import datetime, timezone
 from dataclasses import asdict
-from typing import Any, Dict, Optional, Set, List
+from typing import Any, Dict, Optional, Set, List, Tuple
 
 import httpx
 import paho.mqtt.client as mqtt
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import (
+  FastAPI,
+  WebSocket,
+  WebSocketDisconnect,
+  Request,
+  HTTPException,
+  Query,
+)
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from urllib.parse import urlencode
+from io import BytesIO
+from PIL import Image, ImageDraw
+import math
 
 import state
 from decoder import (
@@ -64,6 +75,7 @@ from config import (
   STATE_DIR,
   STATE_FILE,
   DEVICE_ROLES_FILE,
+  NEIGHBOR_OVERRIDES_FILE,
   STATE_SAVE_INTERVAL,
   DEVICE_TTL_SECONDS,
   TRAIL_LEN,
@@ -149,6 +161,7 @@ from state import (
   message_origins,
   device_roles,
   device_role_sources,
+  neighbor_edges,
 )
 
 # =========================
@@ -168,6 +181,7 @@ git_update_info = {
   "remote_short": None,
   "error": None,
 }
+
 
 # =========================
 # Helpers: coordinate hunting
@@ -193,11 +207,103 @@ def _load_role_overrides() -> Dict[str, str]:
   return roles
 
 
+def _load_neighbor_overrides() -> None:
+  if not NEIGHBOR_OVERRIDES_FILE or not os.path.exists(NEIGHBOR_OVERRIDES_FILE):
+    return
+  try:
+    with open(NEIGHBOR_OVERRIDES_FILE, "r", encoding="utf-8") as handle:
+      data = json.load(handle)
+  except Exception as exc:
+    print(f"[neighbors] failed to load {NEIGHBOR_OVERRIDES_FILE}: {exc}")
+    return
+  now = time.time()
+  added = 0
+
+  def _add_pair(src: str, dst: str) -> None:
+    nonlocal added
+    if not src or not dst or src == dst:
+      return
+    _touch_neighbor(src, dst, now, manual=True)
+    _touch_neighbor(dst, src, now, manual=True)
+    added += 1
+
+  if isinstance(data, dict):
+    for src, targets in data.items():
+      if not isinstance(src, str):
+        continue
+      if isinstance(targets, list):
+        for dst in targets:
+          if isinstance(dst, str):
+            _add_pair(src.strip(), dst.strip())
+      elif isinstance(targets, str):
+        _add_pair(src.strip(), targets.strip())
+  elif isinstance(data, list):
+    for item in data:
+      if (isinstance(item, (list, tuple)) and len(item) >= 2 and
+          isinstance(item[0], str) and isinstance(item[1], str)):
+        _add_pair(item[0].strip(), item[1].strip())
+      elif isinstance(item, dict):
+        src = item.get("from") or item.get("src") or item.get("a")
+        dst = item.get("to") or item.get("dst") or item.get("b")
+        if isinstance(src, str) and isinstance(dst, str):
+          _add_pair(src.strip(), dst.strip())
+
+  if added:
+    print(f"[neighbors] loaded {added} override pairs from {NEIGHBOR_OVERRIDES_FILE}")
+
+
+def _touch_neighbor(src_id: str,
+                    dst_id: str,
+                    ts: float,
+                    manual: bool = False) -> None:
+  if not src_id or not dst_id or src_id == dst_id:
+    return
+  neighbors = neighbor_edges.setdefault(src_id, {})
+  entry = neighbors.get(dst_id)
+  if entry is None:
+    entry = {"count": 0, "last_seen": 0.0, "manual": False}
+    neighbors[dst_id] = entry
+  if manual:
+    entry["manual"] = True
+  else:
+    entry["count"] = int(entry.get("count", 0)) + 1
+  entry["last_seen"] = max(float(entry.get("last_seen", 0.0)), float(ts))
+
+
+def _record_neighbors(point_ids: List[Optional[str]],
+                      ts: float) -> None:
+  if not point_ids or len(point_ids) < 2:
+    return
+  for idx in range(len(point_ids) - 1):
+    src_id = point_ids[idx]
+    dst_id = point_ids[idx + 1]
+    if not src_id or not dst_id or src_id == dst_id:
+      continue
+    _touch_neighbor(src_id, dst_id, ts, manual=False)
+    _touch_neighbor(dst_id, src_id, ts, manual=False)
+
+
+def _prune_neighbors(now: float) -> None:
+  if DEVICE_TTL_SECONDS <= 0 or not neighbor_edges:
+    return
+  cutoff = now - DEVICE_TTL_SECONDS
+  for src_id, edges in list(neighbor_edges.items()):
+    for dst_id, entry in list(edges.items()):
+      if entry.get("manual"):
+        continue
+      if entry.get("last_seen", 0.0) < cutoff:
+        edges.pop(dst_id, None)
+    if not edges:
+      neighbor_edges.pop(src_id, None)
+
+
 def _serialize_state() -> Dict[str, Any]:
   return {
     "version": 1,
     "saved_at": time.time(),
-    "devices": {k: asdict(v) for k, v in devices.items()},
+    "devices": {
+      k: asdict(v) for k, v in devices.items()
+    },
     "trails": trails,
     "seen_devices": seen_devices,
     "device_names": device_names,
@@ -231,7 +337,8 @@ def _check_git_updates() -> None:
       stdout=subprocess.DEVNULL,
       stderr=subprocess.DEVNULL,
     )
-    inside = _run_git(["git", "-C", GIT_CHECK_PATH, "rev-parse", "--is-inside-work-tree"])
+    inside = _run_git(
+      ["git", "-C", GIT_CHECK_PATH, "rev-parse", "--is-inside-work-tree"])
     if inside.lower() != "true":
       git_update_info["error"] = "not_git_repo"
       return
@@ -256,7 +363,9 @@ def _check_git_updates() -> None:
     git_update_info["remote_short"] = remote_sha[:7]
     git_update_info["available"] = local_sha != remote_sha
     if git_update_info["available"]:
-      print(f"[update] available {git_update_info['local_short']} -> {git_update_info['remote_short']}")
+      print(
+        f"[update] available {git_update_info['local_short']} -> {git_update_info['remote_short']}"
+      )
   except Exception:
     git_update_info["error"] = "git_compare_failed"
 
@@ -282,7 +391,8 @@ def _device_payload(device_id: str, state: "DeviceState") -> Dict[str, Any]:
   if mqtt_seen_ts:
     payload["mqtt_seen_ts"] = mqtt_seen_ts
   if MQTT_ONLINE_FORCE_NAMES_SET:
-    name_value = (state.name or device_names.get(device_id) or "").strip().lower()
+    name_value = (state.name or device_names.get(device_id) or
+                  "").strip().lower()
     if name_value and name_value in MQTT_ONLINE_FORCE_NAMES_SET:
       payload["mqtt_forced"] = True
   if PROD_MODE:
@@ -294,7 +404,8 @@ def _iso_from_ts(ts: Optional[float]) -> Optional[str]:
   if ts is None:
     return None
   try:
-    return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.fromtimestamp(
+      float(ts), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
   except Exception:
     return None
 
@@ -399,12 +510,18 @@ def _route_payload(route: Dict[str, Any]) -> Dict[str, Any]:
 
 def _history_edge_payload(edge: Dict[str, Any]) -> Dict[str, Any]:
   return {
-    "id": edge.get("id"),
-    "a": edge.get("a"),
-    "b": edge.get("b"),
-    "count": edge.get("count"),
-    "last_ts": edge.get("last_ts"),
-    "recent": edge.get("recent") if isinstance(edge.get("recent"), list) else [],
+    "id":
+      edge.get("id"),
+    "a":
+      edge.get("a"),
+    "b":
+      edge.get("b"),
+    "count":
+      edge.get("count"),
+    "last_ts":
+      edge.get("last_ts"),
+    "recent":
+      edge.get("recent") if isinstance(edge.get("recent"), list) else [],
   }
 
 
@@ -423,7 +540,8 @@ def _require_prod_token(request: Request) -> None:
     return
   if not PROD_TOKEN:
     raise HTTPException(status_code=503, detail="prod_token_not_set")
-  token = request.query_params.get("token") or request.query_params.get("access_token")
+  token = request.query_params.get("token") or request.query_params.get(
+    "access_token")
   if not token:
     token = _extract_token(request.headers)
   if token != PROD_TOKEN:
@@ -461,7 +579,8 @@ def _load_state() -> None:
       state = DeviceState(**value)
     except Exception:
       continue
-    if _coords_are_zero(state.lat, state.lon) or not _within_map_radius(state.lat, state.lon):
+    if _coords_are_zero(
+        state.lat, state.lon) or not _within_map_radius(state.lat, state.lon):
       dropped_ids.add(str(key))
       continue
     loaded_devices[key] = state
@@ -488,7 +607,8 @@ def _load_state() -> None:
         lon_val = float(lon)
       except (TypeError, ValueError):
         continue
-      if _coords_are_zero(lat_val, lon_val) or not _within_map_radius(lat_val, lon_val):
+      if _coords_are_zero(lat_val,
+                          lon_val) or not _within_map_radius(lat_val, lon_val):
         trails_dirty = True
         continue
       filtered.append(list(entry))
@@ -511,7 +631,9 @@ def _load_state() -> None:
   raw_names = data.get("device_names") or {}
   if isinstance(raw_names, dict):
     device_names.clear()
-    device_names.update({str(k): str(v) for k, v in raw_names.items() if str(v).strip()})
+    device_names.update({
+      str(k): str(v) for k, v in raw_names.items() if str(v).strip()
+    })
   else:
     device_names.clear()
   if dropped_ids:
@@ -520,7 +642,9 @@ def _load_state() -> None:
   raw_role_sources = data.get("device_role_sources") or {}
   if isinstance(raw_role_sources, dict):
     device_role_sources.clear()
-    device_role_sources.update({str(k): str(v) for k, v in raw_role_sources.items() if str(v).strip()})
+    device_role_sources.update({
+      str(k): str(v) for k, v in raw_role_sources.items() if str(v).strip()
+    })
   else:
     device_role_sources.clear()
   if dropped_ids:
@@ -572,12 +696,19 @@ async def _state_saver() -> None:
 
 def mqtt_on_connect(client, userdata, flags, reason_code, properties=None):
   topics_str = ", ".join(MQTT_TOPICS)
-  print(f"[mqtt] connected reason_code={reason_code} subscribing topics={topics_str}")
+  print(
+    f"[mqtt] connected reason_code={reason_code} subscribing topics={topics_str}"
+  )
   for topic in MQTT_TOPICS:
     client.subscribe(topic, qos=0)
 
 
-def mqtt_on_disconnect(client, userdata, reason_code, properties=None, *args, **kwargs):
+def mqtt_on_disconnect(client,
+                       userdata,
+                       reason_code,
+                       properties=None,
+                       *args,
+                       **kwargs):
   print(f"[mqtt] disconnected reason_code={reason_code}")
 
 
@@ -597,12 +728,15 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
       last_sent = last_seen_broadcast.get(dev_guess, 0)
       if now - last_sent >= MQTT_SEEN_BROADCAST_MIN_SECONDS:
         last_seen_broadcast[dev_guess] = now
-        loop.call_soon_threadsafe(update_queue.put_nowait, {
-          "type": "device_seen",
-          "device_id": dev_guess,
-          "last_seen_ts": now,
-          "mqtt_seen_ts": now,
-        })
+        loop.call_soon_threadsafe(
+          update_queue.put_nowait,
+          {
+            "type": "device_seen",
+            "device_id": dev_guess,
+            "last_seen_ts": now,
+            "mqtt_seen_ts": now,
+          },
+        )
 
   parsed, debug = _try_parse_payload(msg.topic, msg.payload)
   device_id_hint = parsed.get("device_id") if parsed else None
@@ -613,11 +747,14 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
     debug["result"] = "filtered_radius"
     parsed = None
     if device_id_hint:
-      loop.call_soon_threadsafe(update_queue.put_nowait, {
-        "type": "device_remove",
-        "device_id": device_id_hint,
-        "reason": "radius",
-      })
+      loop.call_soon_threadsafe(
+        update_queue.put_nowait,
+        {
+          "type": "device_remove",
+          "device_id": device_id_hint,
+          "reason": "radius",
+        },
+      )
   origin_id = debug.get("origin_id") or _device_id_from_topic(msg.topic)
   decoder_meta = debug.get("decoder_meta") or {}
   result = debug.get("result") or "unknown"
@@ -625,7 +762,8 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   role_target_id = origin_id
   if device_role and result.startswith("decoded"):
     role_target_id = None
-    loc_meta = decoder_meta.get("location") if isinstance(decoder_meta, dict) else None
+    loc_meta = (decoder_meta.get("location")
+                if isinstance(decoder_meta, dict) else None)
     loc_pubkey = loc_meta.get("pubkey") if isinstance(loc_meta, dict) else None
     if isinstance(loc_pubkey, str) and loc_pubkey.strip():
       role_target_id = loc_pubkey
@@ -672,10 +810,13 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
       if device_state:
         device_state.name = device_name
         loop: asyncio.AbstractEventLoop = userdata["loop"]
-        loop.call_soon_threadsafe(update_queue.put_nowait, {
-          "type": "device_name",
-          "device_id": origin_id,
-        })
+        loop.call_soon_threadsafe(
+          update_queue.put_nowait,
+          {
+            "type": "device_name",
+            "device_id": origin_id,
+          },
+        )
   if device_role and role_target_id:
     existing_role = device_roles.get(role_target_id)
     if existing_role != device_role:
@@ -686,10 +827,13 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
       if device_state:
         device_state.role = device_role
         loop: asyncio.AbstractEventLoop = userdata["loop"]
-        loop.call_soon_threadsafe(update_queue.put_nowait, {
-          "type": "device_role",
-          "device_id": role_target_id,
-        })
+        loop.call_soon_threadsafe(
+          update_queue.put_nowait,
+          {
+            "type": "device_role",
+            "device_id": role_target_id,
+          },
+        )
 
   path_hashes = decoder_meta.get("pathHashes")
   payload_type = decoder_meta.get("payloadType")
@@ -700,7 +844,8 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   direction = debug.get("direction")
   receiver_id = _device_id_from_topic(msg.topic)
   route_origin_id = None
-  loc_meta = decoder_meta.get("location") if isinstance(decoder_meta, dict) else None
+  loc_meta = decoder_meta.get("location") if isinstance(decoder_meta,
+                                                        dict) else None
   if isinstance(loc_meta, dict):
     decoded_pubkey = loc_meta.get("pubkey")
     if decoded_pubkey:
@@ -709,7 +854,12 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   if message_hash:
     cache = message_origins.get(message_hash)
     if not cache:
-      cache = {"origin_id": None, "first_rx": None, "receivers": set(), "ts": time.time()}
+      cache = {
+        "origin_id": None,
+        "first_rx": None,
+        "receivers": set(),
+        "ts": time.time(),
+      }
       message_origins[message_hash] = cache
     cache["ts"] = time.time()
     origin_for_tx = origin_id or receiver_id
@@ -747,25 +897,53 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
 
   route_emitted = False
   if route_hashes and payload_type in ROUTE_PAYLOAD_TYPES_SET:
-    loop.call_soon_threadsafe(update_queue.put_nowait, {
-      "type": "route",
-      "path_hashes": route_hashes,
-      "payload_type": payload_type,
-      "message_hash": message_hash,
-      "origin_id": route_origin_id,
-      "receiver_id": receiver_id,
-      "snr_values": snr_values,
-      "route_type": route_type,
-      "ts": time.time(),
-      "topic": msg.topic,
-    })
+    loop.call_soon_threadsafe(
+      update_queue.put_nowait,
+      {
+        "type": "route",
+        "path_hashes": route_hashes,
+        "payload_type": payload_type,
+        "message_hash": message_hash,
+        "origin_id": route_origin_id,
+        "receiver_id": receiver_id,
+        "snr_values": snr_values,
+        "route_type": route_type,
+        "ts": time.time(),
+        "topic": msg.topic,
+      },
+    )
     route_emitted = True
   elif message_hash and route_origin_id and receiver_id:
     if direction_value == "rx" and msg.topic.endswith("/packets"):
-      loop.call_soon_threadsafe(update_queue.put_nowait, {
+      loop.call_soon_threadsafe(
+        update_queue.put_nowait,
+        {
+          "type": "route",
+          "route_mode": "fanout",
+          "route_id": f"{message_hash}-{receiver_id}",
+          "origin_id": route_origin_id,
+          "receiver_id": receiver_id,
+          "message_hash": message_hash,
+          "route_type": route_type,
+          "payload_type": payload_type,
+          "ts": time.time(),
+          "topic": msg.topic,
+        },
+      )
+      route_emitted = True
+
+  if (not route_emitted and direction_value == "rx" and
+      msg.topic.endswith("/packets") and receiver_id and route_origin_id and
+      receiver_id != route_origin_id and
+      payload_type in ROUTE_PAYLOAD_TYPES_SET):
+    fallback_id = (message_hash or
+                   f"{route_origin_id}-{receiver_id}-{int(time.time() * 1000)}")
+    loop.call_soon_threadsafe(
+      update_queue.put_nowait,
+      {
         "type": "route",
-        "route_mode": "fanout",
-        "route_id": f"{message_hash}-{receiver_id}",
+        "route_mode": "direct",
+        "route_id": f"direct-{fallback_id}",
         "origin_id": route_origin_id,
         "receiver_id": receiver_id,
         "message_hash": message_hash,
@@ -773,30 +951,15 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
         "payload_type": payload_type,
         "ts": time.time(),
         "topic": msg.topic,
-      })
-      route_emitted = True
-
-  if (not route_emitted and direction_value == "rx" and msg.topic.endswith("/packets")
-      and receiver_id and route_origin_id and receiver_id != route_origin_id
-      and payload_type in ROUTE_PAYLOAD_TYPES_SET):
-    fallback_id = message_hash or f"{route_origin_id}-{receiver_id}-{int(time.time() * 1000)}"
-    loop.call_soon_threadsafe(update_queue.put_nowait, {
-      "type": "route",
-      "route_mode": "direct",
-      "route_id": f"direct-{fallback_id}",
-      "origin_id": route_origin_id,
-      "receiver_id": receiver_id,
-      "message_hash": message_hash,
-      "route_type": route_type,
-      "payload_type": payload_type,
-      "ts": time.time(),
-      "topic": msg.topic,
-    })
+      },
+    )
 
   if not parsed:
     stats["unparsed_total"] += 1
     if DEBUG_PAYLOAD:
-      print(f"[mqtt] UNPARSED result={result} topic={msg.topic} preview={debug_entry['payload_preview']!r}")
+      print(
+        f"[mqtt] UNPARSED result={result} topic={msg.topic} preview={debug_entry['payload_preview']!r}"
+      )
     return
 
   parsed["raw_topic"] = msg.topic
@@ -805,9 +968,14 @@ def mqtt_on_message(client, userdata, msg: mqtt.MQTTMessage):
   stats["last_parsed_topic"] = msg.topic
 
   if DEBUG_PAYLOAD:
-    print(f"[mqtt] PARSED topic={msg.topic} device={parsed['device_id']} lat={parsed['lat']} lon={parsed['lon']}")
+    print(
+      f"[mqtt] PARSED topic={msg.topic} device={parsed['device_id']} lat={parsed['lat']} lon={parsed['lon']}"
+    )
 
-  loop.call_soon_threadsafe(update_queue.put_nowait, {"type": "device", "data": parsed})
+  loop.call_soon_threadsafe(update_queue.put_nowait, {
+    "type": "device",
+    "data": parsed
+  })
 
 
 # =========================
@@ -817,7 +985,10 @@ async def broadcaster():
   while True:
     event = await update_queue.get()
 
-    if isinstance(event, dict) and event.get("type") in ("device_name", "device_role"):
+    if isinstance(event, dict) and event.get("type") in (
+        "device_name",
+        "device_role",
+    ):
       device_id = event.get("device_id")
       device_state = devices.get(device_id)
       if device_state:
@@ -825,7 +996,11 @@ async def broadcaster():
           device_state.name = device_names[device_id]
         if device_id in device_roles:
           device_state.role = device_roles[device_id]
-        payload = {"type": "update", "device": _device_payload(device_id, device_state), "trail": trails.get(device_id, [])}
+        payload = {
+          "type": "update",
+          "device": _device_payload(device_id, device_state),
+          "trail": trails.get(device_id, []),
+        }
         dead = []
         for ws in list(clients):
           try:
@@ -891,31 +1066,36 @@ async def broadcaster():
         )
 
       if not points and route_mode == "fanout":
-        points = _route_points_from_device_ids(event.get("origin_id"), event.get("receiver_id"))
-        if points and event.get("origin_id") and event.get("receiver_id") and len(points) == 2:
+        points = _route_points_from_device_ids(event.get("origin_id"),
+                                               event.get("receiver_id"))
+        if (points and event.get("origin_id") and event.get("receiver_id") and
+            len(points) == 2):
           point_ids = [event.get("origin_id"), event.get("receiver_id")]
 
       # Fallback: if path hashes are missing/unknown, draw a direct link when possible.
       if not points:
-        points = _route_points_from_device_ids(event.get("origin_id"), event.get("receiver_id"))
+        points = _route_points_from_device_ids(event.get("origin_id"),
+                                               event.get("receiver_id"))
         if points:
           route_mode = "direct"
-          if event.get("origin_id") and event.get("receiver_id") and len(points) == 2:
+          if (event.get("origin_id") and event.get("receiver_id") and
+              len(points) == 2):
             point_ids = [event.get("origin_id"), event.get("receiver_id")]
 
       if not points:
         continue
 
       if MAP_RADIUS_KM > 0:
-        outside = any(
-          not _within_map_radius(point[0], point[1])
-          for point in points
-          if isinstance(point, (list, tuple)) and len(point) >= 2
-        )
+        outside = any(not _within_map_radius(point[0], point[1])
+                      for point in points
+                      if isinstance(point, (list, tuple)) and len(point) >= 2)
         if outside:
           continue
 
-      route_id = event.get("route_id") or event.get("message_hash") or f"{event.get('origin_id', 'route')}-{int(event.get('ts', time.time()) * 1000)}"
+      route_id = (
+        event.get("route_id") or event.get("message_hash") or
+        f"{event.get('origin_id', 'route')}-{int(event.get('ts', time.time()) * 1000)}"
+      )
       expires_at = (event.get("ts") or time.time()) + ROUTE_TTL_SECONDS
       route = {
         "id": route_id,
@@ -935,6 +1115,9 @@ async def broadcaster():
       _append_heat_points(points, route["ts"], event.get("payload_type"))
       routes[route_id] = route
 
+      if point_ids and used_hashes:
+        _record_neighbors(point_ids, route["ts"])
+
       history_updates, history_removed = _record_route_history(route)
 
       payload = {"type": "route", "route": _route_payload(route)}
@@ -950,9 +1133,14 @@ async def broadcaster():
         history_payload = {}
         if history_updates:
           history_payload["type"] = "history_edges"
-          history_payload["edges"] = [_history_edge_payload(edge) for edge in history_updates]
+          history_payload["edges"] = [
+            _history_edge_payload(edge) for edge in history_updates
+          ]
         if history_removed:
-          history_payload_remove = {"type": "history_edges_remove", "edge_ids": history_removed}
+          history_payload_remove = {
+            "type": "history_edges_remove",
+            "edge_ids": history_removed,
+          }
         else:
           history_payload_remove = None
         dead = []
@@ -968,7 +1156,8 @@ async def broadcaster():
           clients.discard(ws)
       continue
 
-    upd = event.get("data") if isinstance(event, dict) and event.get("type") == "device" else event
+    upd = (event.get("data") if isinstance(event, dict) and
+           event.get("type") == "device" else event)
 
     device_id = upd["device_id"]
     if not _within_map_radius(upd.get("lat"), upd.get("lon")):
@@ -1007,15 +1196,21 @@ async def broadcaster():
     if device_state.role:
       device_roles[device_id] = device_state.role
 
-    if TRAIL_LEN > 0 and not _coords_are_zero(device_state.lat, device_state.lon):
+    if TRAIL_LEN > 0 and not _coords_are_zero(device_state.lat,
+                                              device_state.lon):
       trails.setdefault(device_id, [])
-      trails[device_id].append([device_state.lat, device_state.lon, device_state.ts])
+      trails[device_id].append(
+        [device_state.lat, device_state.lon, device_state.ts])
       if len(trails[device_id]) > TRAIL_LEN:
         trails[device_id] = trails[device_id][-TRAIL_LEN:]
     elif device_id in trails:
       trails.pop(device_id, None)
 
-    payload = {"type": "update", "device": _device_payload(device_id, device_state), "trail": trails.get(device_id, [])}
+    payload = {
+      "type": "update",
+      "device": _device_payload(device_id, device_state),
+      "trail": trails.get(device_id, []),
+    }
 
     dead = []
     for ws in list(clients):
@@ -1032,7 +1227,10 @@ async def reaper():
     now = time.time()
 
     if DEVICE_TTL_SECONDS > 0:
-      stale = [dev_id for dev_id, st in list(devices.items()) if now - st.ts > DEVICE_TTL_SECONDS]
+      stale = [
+        dev_id for dev_id, st in list(devices.items())
+        if now - st.ts > DEVICE_TTL_SECONDS
+      ]
       if stale:
         payload = {"type": "stale", "device_ids": stale}
         dead = []
@@ -1056,7 +1254,10 @@ async def reaper():
         points = route.get("points") if isinstance(route, dict) else None
         if not isinstance(points, list):
           continue
-        if any(_coords_are_zero(p[0], p[1]) for p in points if isinstance(p, list) and len(p) >= 2):
+        if any(
+            _coords_are_zero(p[0], p[1])
+            for p in points
+            if isinstance(p, list) and len(p) >= 2):
           bad_routes.append(route_id)
       if bad_routes:
         payload = {"type": "route_remove", "route_ids": bad_routes}
@@ -1071,7 +1272,10 @@ async def reaper():
         for route_id in bad_routes:
           routes.pop(route_id, None)
 
-    stale_routes = [route_id for route_id, route in list(routes.items()) if now > route.get("expires_at", 0)]
+    stale_routes = [
+      route_id for route_id, route in list(routes.items())
+      if now > route.get("expires_at", 0)
+    ]
     if stale_routes:
       payload = {"type": "route_remove", "route_ids": stale_routes}
       dead = []
@@ -1091,9 +1295,17 @@ async def reaper():
       for ws in list(clients):
         try:
           if history_updates:
-            await ws.send_text(json.dumps({"type": "history_edges", "edges": history_updates}))
+            await ws.send_text(
+              json.dumps({
+                "type": "history_edges",
+                "edges": history_updates
+              }))
           if history_removed:
-            await ws.send_text(json.dumps({"type": "history_edges_remove", "edge_ids": history_removed}))
+            await ws.send_text(
+              json.dumps({
+                "type": "history_edges_remove",
+                "edge_ids": history_removed,
+              }))
         except Exception:
           dead.append(ws)
       for ws in dead:
@@ -1101,14 +1313,19 @@ async def reaper():
 
     if HEAT_TTL_SECONDS > 0 and heat_events:
       cutoff = now - HEAT_TTL_SECONDS
-      heat_events[:] = [entry for entry in heat_events if entry.get("ts", 0) >= cutoff]
+      heat_events[:] = [
+        entry for entry in heat_events if entry.get("ts", 0) >= cutoff
+      ]
 
     if message_origins:
       for msg_hash, info in list(message_origins.items()):
         if now - info.get("ts", 0) > MESSAGE_ORIGIN_TTL_SECONDS:
           message_origins.pop(msg_hash, None)
 
-    prune_after = max(DEVICE_TTL_SECONDS * 3, 900) if DEVICE_TTL_SECONDS > 0 else 86400
+    _prune_neighbors(now)
+
+    prune_after = (max(DEVICE_TTL_SECONDS *
+                       3, 900) if DEVICE_TTL_SECONDS > 0 else 86400)
     for dev_id, last in list(seen_devices.items()):
       if now - last > prune_after:
         seen_devices.pop(dev_id, None)
@@ -1120,7 +1337,7 @@ async def reaper():
 # FastAPI routes
 # =========================
 @app.get("/")
-def root():
+def root(request: Request):
   html_path = os.path.join(APP_DIR, "static", "index.html")
   try:
     with open(html_path, "r", encoding="utf-8") as handle:
@@ -1128,9 +1345,76 @@ def root():
   except Exception:
     return FileResponse("static/index.html")
 
+  # Check for lat/lon parameters for dynamic preview image
+  query_params = request.query_params
+  lat_param = query_params.get("lat") or query_params.get("latitude")
+  lon_param = (query_params.get("lon") or query_params.get("lng") or
+               query_params.get("long") or query_params.get("longitude"))
+  zoom_param = query_params.get("zoom")
+
   og_image_tag = ""
   twitter_image_tag = ""
-  if SITE_OG_IMAGE:
+  og_url = SITE_URL
+
+  # Generate dynamic preview image if coordinates are provided
+  if lat_param and lon_param:
+    try:
+      lat = float(lat_param)
+      lon = float(lon_param)
+      zoom = int(zoom_param) if zoom_param and zoom_param.isdigit() else 13
+      zoom = max(1, min(18, zoom))  # Clamp zoom between 1-18
+
+      # Generate preview image URL pointing to our own server
+      # Use absolute URL for better compatibility with Discord and other platforms
+      base_url = str(request.url).split("?")[0].rstrip("/")
+      preview_params = urlencode({
+        "lat": lat,
+        "lon": lon,
+        "zoom": zoom,
+        "marker": "blue",
+        "theme": "dark",
+      })
+      preview_url = f"{base_url}/preview.png?{preview_params}"
+
+      # Ensure absolute URL (use SITE_URL if available, otherwise construct from request)
+      if SITE_URL and SITE_URL.startswith("http"):
+        site_base = SITE_URL.rstrip("/")
+        preview_url = f"{site_base}/preview.png?{preview_params}"
+      elif not preview_url.startswith("http"):
+        # Fallback: construct from request
+        scheme = request.url.scheme
+        host = request.headers.get("host", request.url.hostname or "localhost")
+        preview_url = f"{scheme}://{host}/preview.png?{preview_params}"
+
+      safe_image = html.escape(preview_url, quote=True)
+      # Add image dimensions for better Discord/social media compatibility
+      # Note: Preview image may fail if container can't reach external services
+      # In that case, fall back to static SITE_OG_IMAGE if available
+      og_image_tag = (
+        f'<meta property="og:image" content="{safe_image}" />\n'
+        f'  <meta property="og:image:width" content="1200" />\n'
+        f'  <meta property="og:image:height" content="630" />\n'
+        f'  <meta property="og:image:type" content="image/png" />')
+      twitter_image_tag = f'<meta name="twitter:image" content="{safe_image}" />'
+
+      # If static image is configured, add it as a fallback
+      if SITE_OG_IMAGE:
+        safe_static_image = html.escape(str(SITE_OG_IMAGE), quote=True)
+        og_image_tag += f'\n  <meta property="og:image:secure_url" content="{safe_static_image}" />'
+
+      # Update og:url to include query parameters
+      base_url = str(request.url).split("?")[0]
+      og_url = f"{base_url}?lat={lat}&lon={lon}"
+      if zoom_param:
+        og_url += f"&zoom={zoom}"
+    except (ValueError, TypeError):
+      # Invalid coordinates, fall back to static image
+      if SITE_OG_IMAGE:
+        safe_image = html.escape(str(SITE_OG_IMAGE), quote=True)
+        og_image_tag = f'<meta property="og:image" content="{safe_image}" />'
+        twitter_image_tag = (
+          f'<meta name="twitter:image" content="{safe_image}" />')
+  elif SITE_OG_IMAGE:
     safe_image = html.escape(str(SITE_OG_IMAGE), quote=True)
     og_image_tag = f'<meta property="og:image" content="{safe_image}" />'
     twitter_image_tag = f'<meta name="twitter:image" content="{safe_image}" />'
@@ -1142,42 +1426,361 @@ def root():
   if TRAIL_LEN > 0:
     trail_info_suffix = f" Trails show last ~{TRAIL_LEN} points."
 
+  # Escape og_url for HTML
+  SAFE_OG_URL = html.escape(str(og_url), quote=True)
+
   replacements = {
-    "SITE_TITLE": SITE_TITLE,
-    "SITE_DESCRIPTION": SITE_DESCRIPTION,
-    "SITE_URL": SITE_URL,
-    "SITE_ICON": SITE_ICON,
-    "SITE_FEED_NOTE": SITE_FEED_NOTE,
-    "CUSTOM_LINK_URL": CUSTOM_LINK_URL,
-    "DISTANCE_UNITS": DISTANCE_UNITS,
-    "NODE_MARKER_RADIUS": NODE_MARKER_RADIUS,
-    "HISTORY_LINK_SCALE": HISTORY_LINK_SCALE,
-    "TRAIL_INFO_SUFFIX": trail_info_suffix,
-    "PROD_MODE": str(PROD_MODE).lower(),
-    "PROD_TOKEN": PROD_TOKEN,
-    "MAP_START_LAT": MAP_START_LAT,
-    "MAP_START_LON": MAP_START_LON,
-    "MAP_START_ZOOM": MAP_START_ZOOM,
-    "MAP_RADIUS_KM": MAP_RADIUS_KM,
-    "MAP_RADIUS_SHOW": str(MAP_RADIUS_SHOW).lower(),
-    "MAP_DEFAULT_LAYER": MAP_DEFAULT_LAYER,
-    "LOS_ELEVATION_URL": LOS_ELEVATION_URL,
-    "LOS_SAMPLE_MIN": LOS_SAMPLE_MIN,
-    "LOS_SAMPLE_MAX": LOS_SAMPLE_MAX,
-    "LOS_SAMPLE_STEP_METERS": LOS_SAMPLE_STEP_METERS,
-  "LOS_PEAKS_MAX": LOS_PEAKS_MAX,
-  "MQTT_ONLINE_SECONDS": MQTT_ONLINE_SECONDS,
-  "COVERAGE_API_URL": COVERAGE_API_URL,
-  "UPDATE_AVAILABLE": str(bool(git_update_info.get("available"))).lower(),
-  "UPDATE_LOCAL": git_update_info.get("local_short") or "",
-  "UPDATE_REMOTE": git_update_info.get("remote_short") or "",
-  "UPDATE_BANNER_HIDDEN": "" if git_update_info.get("available") else "hidden",
+    "SITE_TITLE":
+      SITE_TITLE,
+    "SITE_DESCRIPTION":
+      SITE_DESCRIPTION,
+    "SITE_URL":
+      SAFE_OG_URL,
+    "SITE_ICON":
+      SITE_ICON,
+    "SITE_FEED_NOTE":
+      SITE_FEED_NOTE,
+    "CUSTOM_LINK_URL":
+      CUSTOM_LINK_URL,
+    "DISTANCE_UNITS":
+      DISTANCE_UNITS,
+    "NODE_MARKER_RADIUS":
+      NODE_MARKER_RADIUS,
+    "HISTORY_LINK_SCALE":
+      HISTORY_LINK_SCALE,
+    "TRAIL_INFO_SUFFIX":
+      trail_info_suffix,
+    "PROD_MODE":
+      str(PROD_MODE).lower(),
+    "PROD_TOKEN":
+      PROD_TOKEN,
+    "MAP_START_LAT":
+      MAP_START_LAT,
+    "MAP_START_LON":
+      MAP_START_LON,
+    "MAP_START_ZOOM":
+      MAP_START_ZOOM,
+    "MAP_RADIUS_KM":
+      MAP_RADIUS_KM,
+    "MAP_RADIUS_SHOW":
+      str(MAP_RADIUS_SHOW).lower(),
+    "MAP_DEFAULT_LAYER":
+      MAP_DEFAULT_LAYER,
+    "LOS_ELEVATION_URL":
+      LOS_ELEVATION_URL,
+    "LOS_SAMPLE_MIN":
+      LOS_SAMPLE_MIN,
+    "LOS_SAMPLE_MAX":
+      LOS_SAMPLE_MAX,
+    "LOS_SAMPLE_STEP_METERS":
+      LOS_SAMPLE_STEP_METERS,
+    "LOS_PEAKS_MAX":
+      LOS_PEAKS_MAX,
+    "MQTT_ONLINE_SECONDS":
+      MQTT_ONLINE_SECONDS,
+    "COVERAGE_API_URL":
+      COVERAGE_API_URL,
+    "UPDATE_AVAILABLE":
+      str(bool(git_update_info.get("available"))).lower(),
+    "UPDATE_LOCAL":
+      git_update_info.get("local_short") or "",
+    "UPDATE_REMOTE":
+      git_update_info.get("remote_short") or "",
+    "UPDATE_BANNER_HIDDEN":
+      "" if git_update_info.get("available") else "hidden",
   }
   for key, value in replacements.items():
     safe_value = html.escape(str(value), quote=True)
     content = content.replace(f"{{{{{key}}}}}", safe_value)
 
   return HTMLResponse(content)
+
+
+@app.get("/preview.png")
+async def preview_image(
+    lat: Optional[float] = Query(None, alias="lat"),
+    lon: Optional[float] = Query(None, alias="lon"),
+    zoom: Optional[int] = Query(13, alias="zoom"),
+    marker: Optional[str] = Query("blue", alias="marker"),
+    theme: Optional[str] = Query("dark", alias="theme"),
+):
+  """
+    Generate a preview image of the map with a pin marker at the specified coordinates.
+    Returns a PNG image suitable for Open Graph/Twitter card previews.
+
+    Marker options:
+    - red-pin, blue-pin, green-pin, yellow-pin, orange-pin, purple-pin, black-pin, white-pin
+    - red, blue, green, yellow, orange, purple, black, white (simple circle markers)
+    - Custom format: color-pin or color (e.g., "blue-pin", "green")
+    """
+  if lat is None or lon is None:
+    # Return a default/error image if coordinates not provided
+    return Response(content=b"", status_code=400, media_type="image/png")
+
+  try:
+    zoom_val = max(1, min(18, int(zoom) if zoom else 14))
+
+    # Image dimensions for social media previews (Open Graph standard)
+    width = 1200
+    height = 630
+
+    # Validate and sanitize marker option
+    marker_str = str(marker).lower().strip() if marker else "blue"
+    if not marker_str or marker_str == "none":
+      marker_str = "blue"
+
+    # Validate theme option (light or dark)
+    theme_str = str(theme).lower().strip() if theme else "dark"
+    if theme_str not in ("light", "dark"):
+      theme_str = "dark"
+
+    # Generate map image server-side using OSM tiles
+    try:
+      # Convert lat/lon to tile coordinates
+      def deg2num(lat_deg, lon_deg, zoom_level):
+        lat_rad = math.radians(lat_deg)
+        n = 2.0**zoom_level
+        xtile = int((lon_deg + 180.0) / 360.0 * n)
+        ytile = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+        return (xtile, ytile)
+
+      def num2deg(xtile, ytile, zoom_level):
+        n = 2.0**zoom_level
+        lon_deg = xtile / n * 360.0 - 180.0
+        lat_rad = math.atan(math.sinh(math.pi * (1 - 2 * ytile / n)))
+        lat_deg = math.degrees(lat_rad)
+        return (lat_deg, lon_deg)
+
+      # Calculate which tiles we need
+      center_tile_x, center_tile_y = deg2num(lat, lon, zoom_val)
+      tile_size = 256
+      tiles_x = math.ceil(width / tile_size) + 2
+      tiles_y = math.ceil(height / tile_size) + 2
+
+      # Calculate pixel position of center point within its tile
+      # Get the northwest corner of the center tile
+      nw_lat, nw_lon = num2deg(center_tile_x, center_tile_y, zoom_val)
+      # Get the southeast corner of the center tile
+      se_lat, se_lon = num2deg(center_tile_x + 1, center_tile_y + 1, zoom_val)
+
+      # Calculate pixel offset within the center tile
+      center_tile_pixel_x = int((lon - nw_lon) / (se_lon - nw_lon) * tile_size)
+      center_tile_pixel_y = int((nw_lat - lat) / (nw_lat - se_lat) * tile_size)
+
+      # Calculate which tiles to fetch
+      start_tile_x = center_tile_x - tiles_x // 2
+      start_tile_y = center_tile_y - tiles_y // 2
+
+      # Create blank image with theme-appropriate background
+      bg_color = ((18, 18, 18) if theme_str == "dark" else
+                  (242, 239, 233))  # Dark or light background
+      final_image = Image.new("RGB", (width, height), bg_color)
+
+      # Fetch and composite tiles
+      tiles_fetched = 0
+      tiles_failed = 0
+      async with httpx.AsyncClient(timeout=10.0, verify=False) as client:
+        for ty in range(tiles_y):
+          for tx in range(tiles_x):
+            tile_x = start_tile_x + tx
+            tile_y = start_tile_y + ty
+
+            # Use theme-appropriate tile server
+            if theme_str == "dark":
+              # CartoDB Dark Matter tiles
+              tile_url = f"https://a.basemaps.cartocdn.com/dark_all/{zoom_val}/{tile_x}/{tile_y}.png"
+            else:
+              # Standard OSM light tiles
+              tile_url = f"https://tile.openstreetmap.org/{zoom_val}/{tile_x}/{tile_y}.png"
+
+            try:
+              response = await client.get(tile_url)
+              if response.status_code == 200:
+                tile_img = Image.open(BytesIO(response.content))
+                # Calculate position: center the marker at the center of the image
+                # The center tile should place the marker at the center pixel position
+                x_offset = ((tx - tiles_x // 2) * tile_size + width // 2 -
+                            center_tile_pixel_x)
+                y_offset = ((ty - tiles_y // 2) * tile_size + height // 2 -
+                            center_tile_pixel_y)
+                final_image.paste(
+                  tile_img,
+                  (x_offset, y_offset),
+                  tile_img if tile_img.mode == "RGBA" else None,
+                )
+                tiles_fetched += 1
+              else:
+                tiles_failed += 1
+                print(
+                  f"[preview] Tile {tile_x}/{tile_y} returned status {response.status_code}"
+                )
+            except Exception as tile_error:
+              tiles_failed += 1
+              print(
+                f"[preview] Failed to fetch tile {tile_x}/{tile_y} from {tile_url}: {tile_error}"
+              )
+              continue
+
+      print(f"[preview] Fetched {tiles_fetched} tiles, {tiles_failed} failed")
+
+      # Draw current devices (all in-bounds, no cap)
+      def latlon_to_global_px(lat_deg: float, lon_deg: float,
+                              zoom_level: int) -> Tuple[float, float]:
+        lat_rad = math.radians(lat_deg)
+        n = 2.0**zoom_level
+        x_px = (lon_deg + 180.0) / 360.0 * n * tile_size
+        y_px = ((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n *
+                tile_size)
+        return (x_px, y_px)
+
+      draw = ImageDraw.Draw(final_image)
+      center_px_x, center_px_y = latlon_to_global_px(lat, lon, zoom_val)
+      node_radius = 5
+      node_color = (86, 198, 255) if theme_str == "dark" else (25, 83, 170)
+      node_outline = (15, 15, 15) if theme_str == "dark" else (255, 255, 255)
+      for state in list(devices.values()):
+        try:
+          dev_lat = float(state.lat)
+          dev_lon = float(state.lon)
+        except Exception:
+          continue
+        if _coords_are_zero(
+            dev_lat, dev_lon) or not _within_map_radius(dev_lat, dev_lon):
+          continue
+        dev_px_x, dev_px_y = latlon_to_global_px(dev_lat, dev_lon, zoom_val)
+        img_x = width / 2 + (dev_px_x - center_px_x)
+        img_y = height / 2 + (dev_px_y - center_px_y)
+        if (img_x < -node_radius or img_x > width + node_radius or
+            img_y < -node_radius or img_y > height + node_radius):
+          continue
+        draw.ellipse(
+          [
+            (img_x - node_radius, img_y - node_radius),
+            (img_x + node_radius, img_y + node_radius),
+          ],
+          fill=node_color,
+          outline=node_outline,
+          width=2,
+        )
+
+      # Draw marker
+      marker_color_map = {
+        "red": (220, 53, 69),
+        "blue": (0, 123, 255),
+        "green": (40, 167, 69),
+        "yellow": (255, 193, 7),
+        "orange": (255, 152, 0),
+        "purple": (108, 117, 125),
+        "black": (0, 0, 0),
+        "white": (255, 255, 255),
+      }
+      marker_color = marker_color_map.get(marker_str,
+                                          (0, 123, 255))  # Default to blue
+
+      # Calculate marker position (center of image)
+      marker_x = width // 2
+      marker_y = height // 2
+
+      # Draw a circle marker
+      marker_radius = 12
+      draw.ellipse(
+        [
+          (marker_x - marker_radius, marker_y - marker_radius),
+          (marker_x + marker_radius, marker_y + marker_radius),
+        ],
+        fill=marker_color,
+        outline=(255, 255, 255),
+        width=2,
+      )
+
+      # Convert to PNG bytes
+      img_bytes = BytesIO()
+      final_image.save(img_bytes, format="PNG")
+      img_bytes.seek(0)
+
+      return Response(
+        content=img_bytes.getvalue(),
+        media_type="image/png",
+        headers={
+          "Cache-Control": "public, max-age=3600",  # Cache for 1 hour
+        },
+      )
+
+    except Exception as e:
+      print(f"[preview] Error generating map image: {e}")
+      import traceback
+
+      traceback.print_exc()
+
+      # Even if tile fetching fails, try to return a simple map with marker
+      try:
+        bg_color = (18, 18, 18) if theme_str == "dark" else (242, 239, 233)
+        fallback_image = Image.new("RGB", (width, height), bg_color)
+        draw = ImageDraw.Draw(fallback_image)
+
+        # Draw marker
+        marker_color_map = {
+          "red": (220, 53, 69),
+          "blue": (0, 123, 255),
+          "green": (40, 167, 69),
+          "yellow": (255, 193, 7),
+          "orange": (255, 152, 0),
+          "purple": (108, 117, 125),
+          "black": (0, 0, 0),
+          "white": (255, 255, 255),
+        }
+        marker_color = marker_color_map.get(marker_str, (0, 123, 255))
+        marker_x = width // 2
+        marker_y = height // 2
+        marker_radius = 12
+        draw.ellipse(
+          [
+            (marker_x - marker_radius, marker_y - marker_radius),
+            (marker_x + marker_radius, marker_y + marker_radius),
+          ],
+          fill=marker_color,
+          outline=(255, 255, 255),
+          width=2,
+        )
+
+        img_bytes = BytesIO()
+        fallback_image.save(img_bytes, format="PNG")
+        img_bytes.seek(0)
+
+        print(
+          f"[preview] Returning fallback image with marker (tile fetch failed)")
+        return Response(
+          content=img_bytes.getvalue(),
+          media_type="image/png",
+          headers={"Cache-Control": "public, max-age=300"},
+        )
+      except Exception as fallback_error:
+        print(
+          f"[preview] Fallback image generation also failed: {fallback_error}")
+        # Only redirect to static image if even fallback fails
+        if SITE_OG_IMAGE and SITE_OG_IMAGE.startswith("http"):
+          from fastapi.responses import RedirectResponse
+
+          print(
+            f"[preview] All image generation failed, redirecting to static OG image: {SITE_OG_IMAGE}"
+          )
+          return RedirectResponse(url=SITE_OG_IMAGE, status_code=302)
+
+        # Return transparent PNG as last resort
+        transparent_png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xdb\x00\x00\x00\x00IEND\xaeB`\x82"
+        return Response(
+          content=transparent_png,
+          media_type="image/png",
+          headers={"Cache-Control": "public, max-age=300"},
+        )
+  except Exception as e:
+    # Log error for debugging
+    print(f"[preview] Error generating preview image: {e}")
+    import traceback
+
+    traceback.print_exc()
+    # Return empty image on error
+    return Response(content=b"", status_code=500, media_type="image/png")
 
 
 @app.get("/manifest.webmanifest")
@@ -1189,14 +1792,14 @@ def manifest():
         "src": SITE_ICON,
         "sizes": "192x192",
         "type": "image/png",
-        "purpose": "any"
+        "purpose": "any",
       },
       {
         "src": SITE_ICON,
         "sizes": "512x512",
         "type": "image/png",
-        "purpose": "any maskable"
-      }
+        "purpose": "any maskable",
+      },
     ]
   short_name = SITE_TITLE if len(SITE_TITLE) <= 12 else SITE_TITLE[:12]
   return JSONResponse(
@@ -1210,7 +1813,7 @@ def manifest():
       "display_override": ["standalone", "minimal-ui"],
       "background_color": "#0f172a",
       "theme_color": "#0f172a",
-      "icons": icons
+      "icons": icons,
     },
     media_type="application/manifest+json",
   )
@@ -1225,10 +1828,14 @@ def service_worker():
 def snapshot(request: Request):
   _require_prod_token(request)
   return {
-    "devices": {k: _device_payload(k, v) for k, v in devices.items()},
+    "devices": {
+      k: _device_payload(k, v) for k, v in devices.items()
+    },
     "trails": trails,
     "routes": [_route_payload(r) for r in routes.values()],
-    "history_edges": [_history_edge_payload(e) for e in route_history_edges.values()],
+    "history_edges": [
+      _history_edge_payload(e) for e in route_history_edges.values()
+    ],
     "history_window_seconds": int(max(0, ROUTE_HISTORY_HOURS * 3600)),
     "heat": _serialize_heat_events(),
     "update": git_update_info,
@@ -1255,35 +1862,52 @@ def get_stats():
       "server_time": time.time(),
     }
 
-  top_topics = sorted(topic_counts.items(), key=lambda kv: kv[1], reverse=True)[:20]
+  top_topics = sorted(topic_counts.items(), key=lambda kv: kv[1],
+                      reverse=True)[:20]
   return {
-    "stats": stats,
-    "result_counts": result_counts,
-    "mapped_devices": len(devices),
-    "route_count": len(routes),
-    "history_edge_count": len(route_history_edges),
-    "history_segments": len(route_history_segments),
-    "seen_devices": len(seen_devices),
-    "seen_recent": sorted(seen_devices.items(), key=lambda kv: kv[1], reverse=True)[:20],
-    "top_topics": top_topics,
+    "stats":
+      stats,
+    "result_counts":
+      result_counts,
+    "mapped_devices":
+      len(devices),
+    "route_count":
+      len(routes),
+    "history_edge_count":
+      len(route_history_edges),
+    "history_segments":
+      len(route_history_segments),
+    "seen_devices":
+      len(seen_devices),
+    "seen_recent":
+      sorted(seen_devices.items(), key=lambda kv: kv[1], reverse=True)[:20],
+    "top_topics":
+      top_topics,
     "decoder": {
       "decode_with_node": DECODE_WITH_NODE,
       "node_ready": _node_ready_once,
       "node_unavailable": _node_unavailable_once,
     },
-    "route_payload_types": sorted(ROUTE_PAYLOAD_TYPES_SET),
+    "route_payload_types":
+      sorted(ROUTE_PAYLOAD_TYPES_SET),
     "direct_coords": {
       "mode": DIRECT_COORDS_MODE,
       "topic_regex": DIRECT_COORDS_TOPIC_REGEX,
       "regex_valid": DIRECT_COORDS_TOPIC_RE is not None,
       "allow_zero": DIRECT_COORDS_ALLOW_ZERO,
     },
-    "server_time": time.time(),
+    "server_time":
+      time.time(),
   }
 
 
 @app.get("/api/nodes")
-def api_nodes(request: Request, updated_since: Optional[str] = None, mode: Optional[str] = None, format: Optional[str] = None):
+def api_nodes(
+  request: Request,
+  updated_since: Optional[str] = None,
+  mode: Optional[str] = None,
+  format: Optional[str] = None,
+):
   _require_prod_token(request)
   cutoff = _parse_updated_since(updated_since)
   mode_value = (mode or "").strip().lower()
@@ -1330,14 +1954,18 @@ def get_peers(device_id: str, request: Request, limit: int = 8):
   if state and not _coords_are_zero(state.lat, state.lon):
     payload["lat"] = float(state.lat)
     payload["lon"] = float(state.lon)
-  payload["name"] = (state.name if state else None) or device_names.get(device_id) or ""
-  payload["role"] = (state.role if state else None) or device_roles.get(device_id)
-  payload["last_seen_ts"] = seen_devices.get(device_id) or (state.ts if state else None)
+  payload["name"] = ((state.name if state else None) or
+                     device_names.get(device_id) or "")
+  payload["role"] = (state.role
+                     if state else None) or device_roles.get(device_id)
+  payload["last_seen_ts"] = seen_devices.get(device_id) or (state.ts
+                                                            if state else None)
   payload["server_time"] = time.time()
   return payload
 
 
-def _peer_device_payload(peer_id: str, count: int, total: int, last_ts: Optional[float]) -> Dict[str, Any]:
+def _peer_device_payload(peer_id: str, count: int, total: int,
+                         last_ts: Optional[float]) -> Dict[str, Any]:
   state = devices.get(peer_id)
   name = None
   role = None
@@ -1406,11 +2034,13 @@ def _peer_stats_for_device(device_id: str, limit: int) -> Dict[str, Any]:
   outbound_total = sum(outbound.values())
 
   inbound_items = [
-    _peer_device_payload(peer_id, count, inbound_total, inbound_last.get(peer_id))
+    _peer_device_payload(peer_id, count, inbound_total,
+                         inbound_last.get(peer_id))
     for peer_id, count in inbound.items()
   ]
   outbound_items = [
-    _peer_device_payload(peer_id, count, outbound_total, outbound_last.get(peer_id))
+    _peer_device_payload(peer_id, count, outbound_total,
+                         outbound_last.get(peer_id))
     for peer_id, count in outbound.items()
   ]
   inbound_items.sort(key=lambda item: item.get("count", 0), reverse=True)
@@ -1431,7 +2061,11 @@ def _peer_stats_for_device(device_id: str, limit: int) -> Dict[str, Any]:
 
 
 @app.get("/los")
-def line_of_sight(lat1: float, lon1: float, lat2: float, lon2: float, profile: bool = False):
+def line_of_sight(lat1: float,
+                  lon1: float,
+                  lat2: float,
+                  lon2: float,
+                  profile: bool = False):
   include_points = bool(profile)
   start = _normalize_lat_lon(lat1, lon1)
   end = _normalize_lat_lon(lat2, lon2)
@@ -1484,17 +2118,23 @@ def line_of_sight(lat1: float, lon1: float, lat2: float, lon2: float, profile: b
     "peaks": peaks,
   }
   if include_points:
-    response["profile_points"] = [
-      [round(lat, 6), round(lon, 6), round(t, 4), round(float(elev), 2)]
-      for (lat, lon, t), elev in zip(points, elevations)
-    ]
+    response["profile_points"] = [[
+      round(lat, 6),
+      round(lon, 6),
+      round(t, 4),
+      round(float(elev), 2)
+    ] for (lat, lon, t), elev in zip(points, elevations)]
   return response
 
 
 @app.get("/coverage")
 async def get_coverage():
   if not COVERAGE_API_URL:
-    raise HTTPException(status_code=503, detail="coverage_api_not_configured: Set COVERAGE_API_URL in .env (e.g., http://localhost:3000)")
+    raise HTTPException(
+      status_code=503,
+      detail=
+      "coverage_api_not_configured: Set COVERAGE_API_URL in .env (e.g., http://localhost:3000)",
+    )
   try:
     url = f"{COVERAGE_API_URL}/get-samples"
     print(f"[coverage] Fetching from {url}")
@@ -1503,19 +2143,29 @@ async def get_coverage():
       response.raise_for_status()
       data = response.json()
       # /get-samples returns { keys: [...] }, extract the keys array
-      samples = data.get("keys", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-      print(f"[coverage] Received {len(samples) if isinstance(samples, list) else 'non-list'} items from coverage API")
+      samples = (data.get("keys", []) if isinstance(data, dict) else
+                 (data if isinstance(data, list) else []))
+      print(
+        f"[coverage] Received {len(samples) if isinstance(samples, list) else 'non-list'} items from coverage API"
+      )
       if isinstance(samples, list) and len(samples) > 0:
-        print(f"[coverage] Sample item keys: {list(samples[0].keys()) if samples[0] else 'N/A'}")
+        print(
+          f"[coverage] Sample item keys: {list(samples[0].keys()) if samples[0] else 'N/A'}"
+        )
       return samples
   except httpx.TimeoutException:
     raise HTTPException(status_code=504, detail="coverage_api_timeout")
   except httpx.HTTPStatusError as e:
-    raise HTTPException(status_code=502, detail=f"coverage_api_error: HTTP {e.response.status_code} from {COVERAGE_API_URL}")
+    raise HTTPException(
+      status_code=502,
+      detail=
+      f"coverage_api_error: HTTP {e.response.status_code} from {COVERAGE_API_URL}",
+    )
   except httpx.HTTPError as e:
     raise HTTPException(status_code=502, detail=f"coverage_api_error: {str(e)}")
   except Exception as e:
-    raise HTTPException(status_code=500, detail=f"coverage_fetch_error: {str(e)}")
+    raise HTTPException(status_code=500,
+                        detail=f"coverage_fetch_error: {str(e)}")
 
 
 @app.get("/debug/last")
@@ -1549,16 +2199,21 @@ async def ws_endpoint(ws: WebSocket):
   await ws.accept()
   clients.add(ws)
 
-  await ws.send_text(json.dumps({
-    "type": "snapshot",
-    "devices": {k: _device_payload(k, v) for k, v in devices.items()},
-    "trails": trails,
-    "routes": [_route_payload(r) for r in routes.values()],
-    "history_edges": [_history_edge_payload(e) for e in route_history_edges.values()],
-    "history_window_seconds": int(max(0, ROUTE_HISTORY_HOURS * 3600)),
-    "heat": _serialize_heat_events(),
-    "update": git_update_info,
-  }))
+  await ws.send_text(
+    json.dumps({
+      "type": "snapshot",
+      "devices": {
+        k: _device_payload(k, v) for k, v in devices.items()
+      },
+      "trails": trails,
+      "routes": [_route_payload(r) for r in routes.values()],
+      "history_edges": [
+        _history_edge_payload(e) for e in route_history_edges.values()
+      ],
+      "history_window_seconds": int(max(0, ROUTE_HISTORY_HOURS * 3600)),
+      "heat": _serialize_heat_events(),
+      "update": git_update_info,
+    }))
 
   try:
     while True:
@@ -1580,6 +2235,7 @@ async def startup():
 
   _load_state()
   _load_route_history()
+  _load_neighbor_overrides()
   _ensure_node_decoder()
   _check_git_updates()
 
@@ -1588,7 +2244,7 @@ async def startup():
 
   topics_str = ", ".join(MQTT_TOPICS)
   print(
-    f"[mqtt] connecting host={MQTT_HOST} port={MQTT_PORT} tls={MQTT_TLS} transport={transport} ws_path={MQTT_WS_PATH if transport=='websockets' else '-'} topics={topics_str}"
+    f"[mqtt] connecting host={MQTT_HOST} port={MQTT_PORT} tls={MQTT_TLS} transport={transport} ws_path={MQTT_WS_PATH if transport == 'websockets' else '-'} topics={topics_str}"
   )
 
   mqtt_client = mqtt.Client(
