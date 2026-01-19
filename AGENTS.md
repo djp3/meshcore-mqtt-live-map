@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-Current version: `1.0.8` (see `VERSIONS.md`).
+Current version: `1.0.9` (see `VERSIONS.md`).
 
 ## Project Structure & Module Organization
 - `backend/app.py` wires FastAPI routes, MQTT lifecycle, and websocket broadcast flow.
@@ -17,7 +17,7 @@ Current version: `1.0.8` (see `VERSIONS.md`).
 - `docker-compose.yaml` runs the service as `meshmap-live`.
 - `data/` stores persisted state (`state.json`), route history (`route_history.jsonl`), role overrides (`device_roles.json`), and optional neighbor overrides (`neighbor_overrides.json`).
 - `.env` holds dev runtime settings; `.env.example` mirrors template defaults.
-- `VERSION.txt` tracks the current version (now `1.0.8`); append changes in `VERSIONS.md`.
+- `VERSION.txt` tracks the current version (now `1.0.9`); append changes in `VERSIONS.md`.
 
 ## Build, Test, and Development Commands
 - `docker compose up -d --build` rebuilds and restarts the backend (preferred workflow).
@@ -28,6 +28,9 @@ Current version: `1.0.8` (see `VERSIONS.md`).
 
 ## Coding Style & Naming Conventions
 - Python in `backend/*.py` uses **2-space indentation**; keep it consistent.
+- The project enforces an **80-character column limit** for Python code to maintain readability.
+- Formatting is handled by `yapf` using the config in `backend/.style.yapf`.
+  - To format code manually: `yapf --in-place --recursive --style backend/.style.yapf backend/`
 - HTML/CSS/JS in `backend/static/index.html` uses 2 spaces as well.
 - Use lowercase, underscore-separated names for Python variables/functions.
 - Prefer small helper functions for parsing/normalization; keep logging concise.
