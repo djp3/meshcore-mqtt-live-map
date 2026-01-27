@@ -165,7 +165,9 @@ LOS_PEAKS_MAX = int(os.getenv("LOS_PEAKS_MAX", "4"))
 
 COVERAGE_API_URL = os.getenv("COVERAGE_API_URL", "").strip()
 
-TURNSTILE_ENABLED = os.getenv("TURNSTILE_ENABLED", "false").lower() == "true"
+TURNSTILE_ENABLED_RAW = os.getenv("TURNSTILE_ENABLED", "false").lower() == "true"
+# Turnstile protection is only allowed when PROD_MODE is enabled.
+TURNSTILE_ENABLED = PROD_MODE and TURNSTILE_ENABLED_RAW
 TURNSTILE_SITE_KEY = os.getenv("TURNSTILE_SITE_KEY", "").strip()
 TURNSTILE_SECRET_KEY = os.getenv("TURNSTILE_SECRET_KEY", "").strip()
 TURNSTILE_API_URL = os.getenv(
@@ -177,7 +179,7 @@ TURNSTILE_BOT_ALLOWLIST = os.getenv(
   "TURNSTILE_BOT_ALLOWLIST",
   (
     "discordbot,twitterbot,slackbot,facebookexternalhit,"
-    "linkedinbot,telegrambot,whatsapp"
+    "linkedinbot,telegrambot,whatsapp,skypeuripreview,redditbot"
   ),
 ).strip()
 
