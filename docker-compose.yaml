@@ -53,7 +53,7 @@ services:
       TURNSTILE_SECRET_KEY: "${TURNSTILE_SECRET_KEY:-}"
       TURNSTILE_API_URL: "${TURNSTILE_API_URL:-https://challenges.cloudflare.com/turnstile/v0/siteverify}"
       TURNSTILE_TOKEN_TTL_SECONDS: "${TURNSTILE_TOKEN_TTL_SECONDS:-86400}"
-     restart: unless-stopped
+    restart: unless-stopped
     volumes:
       - ./data:/data
       - ./:/repo:ro
