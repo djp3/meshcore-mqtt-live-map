@@ -1,9 +1,9 @@
 # Versions
 
 ## v1.2.1 (01-29-2026)
-- Feature: Display hop numbers on route paths with a toggle button.
-- Feature: Consistent hop coloring based on route hash.
-- Feature: Route details panel with hop list, hash byte IDs, and per-hop/cumulative distance.
+- Feature: Display hop numbers on route paths with a toggle button (credit: https://github.com/slack-t).
+- Feature: Consistent hop coloring based on route hash (credit: https://github.com/slack-t).
+- Feature: Route details panel with hop list, hash byte IDs, and per-hop/cumulative distance (credit: https://github.com/slack-t).
 - Fix: Route details updates live when hops arrive and respects km/mi unit toggles.
 - Fix: Route details panel now stacks with other tools (no overlap); LOS panel is scrollable.
 
