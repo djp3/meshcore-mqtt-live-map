@@ -1,5 +1,21 @@
 # Versions
 
+## v1.2.4 (01-29-2026)
+- Turnstile auth now grants access to `/snapshot`, `/stats`, `/peers`, and WebSocket without requiring a PROD token (prevents WS reconnect spam).
+- Show Hops panel now includes total route distance (sum of hop-to-hop segments) and updates live with unit toggles.
+
+## v1.2.2 (01-29-2026)
+- Fix: Route lines now rely only on decoded packet paths, avoiding MQTT observer/receiver fallback links.
+- Fix: Turnstile can enable when `PROD_MODE=true` by passing `PROD_MODE`/`PROD_TOKEN` into the container.
+- UI: Added `darkreader-lock` meta on the map + landing pages to prevent Dark Reader overrides.
+
+## v1.2.1 (01-29-2026)
+- Feature: Display hop numbers on route paths with a toggle button (credit: https://github.com/slack-t).
+- Feature: Consistent hop coloring based on route hash (credit: https://github.com/slack-t).
+- Feature: Route details panel with hop list, hash byte IDs, and per-hop/cumulative distance (credit: https://github.com/slack-t).
+- Fix: Route details updates live when hops arrive and respects km/mi unit toggles.
+- Fix: Route details panel now stacks with other tools (no overlap); LOS panel is scrollable.
+
 ## v1.2.0 (01-27-2026)
 - Add Cloudflare Turnstile protection with a landing/verification flow and auth cookie.
 - Turnstile now only activates when `PROD_MODE=true` (even if `TURNSTILE_ENABLED=true`).
