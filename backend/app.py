@@ -136,6 +136,7 @@ from config import (
   PROD_MODE,
   PROD_TOKEN,
   LOS_ELEVATION_URL,
+  LOS_ELEVATION_PROXY_URL,
   LOS_SAMPLE_MIN,
   LOS_SAMPLE_MAX,
   LOS_SAMPLE_STEP_METERS,
@@ -1587,6 +1588,8 @@ def root(request: Request):
       MAP_DEFAULT_LAYER,
     "LOS_ELEVATION_URL":
       LOS_ELEVATION_URL,
+    "LOS_ELEVATION_PROXY_URL":
+      LOS_ELEVATION_PROXY_URL,
     "LOS_SAMPLE_MIN":
       LOS_SAMPLE_MIN,
     "LOS_SAMPLE_MAX":
@@ -1975,6 +1978,7 @@ def map_page(request: Request):
     "MAP_RADIUS_SHOW": str(MAP_RADIUS_SHOW).lower(),
     "MAP_DEFAULT_LAYER": MAP_DEFAULT_LAYER,
     "LOS_ELEVATION_URL": LOS_ELEVATION_URL,
+    "LOS_ELEVATION_PROXY_URL": LOS_ELEVATION_PROXY_URL,
     "LOS_SAMPLE_MIN": LOS_SAMPLE_MIN,
     "LOS_SAMPLE_MAX": LOS_SAMPLE_MAX,
     "LOS_SAMPLE_STEP_METERS": LOS_SAMPLE_STEP_METERS,
@@ -2358,6 +2362,38 @@ def line_of_sight(
       for (lat, lon, t), elev in zip(points, elevations)
     ]
   return response
+
+
+@app.get("/los/elevations")
+def los_elevations(locations: str = ""):
+  raw = [loc for loc in (locations or "").split("|") if loc.strip()]
+  if not raw:
+    return {"status": "ERROR", "error": "missing_locations"}
+  if len(raw) > 200:
+    return {"status": "ERROR", "error": "too_many_locations"}
+  points = []
+  for loc in raw:
+    parts = loc.split(",")
+    if len(parts) != 2:
+      return {"status": "ERROR", "error": "invalid_location"}
+    try:
+      lat = float(parts[0])
+      lon = float(parts[1])
+    except (ValueError, TypeError):
+      return {"status": "ERROR", "error": "invalid_coords"}
+    normalized = _normalize_lat_lon(lat, lon)
+    if not normalized:
+      return {"status": "ERROR", "error": "invalid_coords"}
+    points.append((normalized[0], normalized[1], 0.0))
+
+  elevations, error = _fetch_elevations(points)
+  if error:
+    return {"status": "ERROR", "error": error}
+  return {
+    "status": "OK",
+    "results": [{"elevation": round(float(elev), 2)} for elev in elevations],
+    "provider": LOS_ELEVATION_URL,
+  }
 
 
 @app.get("/coverage")
