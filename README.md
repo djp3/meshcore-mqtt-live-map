@@ -1,6 +1,6 @@
 # Mesh Live Map
 
-Version: `1.2.6` (see [VERSIONS.md](VERSIONS.md))
+Version: `1.3.0` (see [VERSIONS.md](VERSIONS.md))
 
 Live MeshCore traffic map that renders nodes, routes, and activity in real time on a Leaflet map. The backend subscribes to MQTT over WebSockets+TLS or TCP, decodes MeshCore packets with `@michaelhart/meshcore-decoder`, and streams updates to the browser via WebSockets.
 
@@ -32,7 +32,7 @@ Live example sites:
 - URL parameters to open the map at a specific view (center, zoom, toggles)
 - Node search by name or public key
 - Adjustable node size slider (defaults from env, saves locally)
-- LOS tool with elevation profile + peak markers and hover sync (Shift+click or long‑press nodes)
+- LOS tool with elevation profile + peak markers, hover sync, and realtime draggable endpoints (Shift+click or long‑press nodes)
 - Embeddable metadata (Open Graph/Twitter tags) driven by env vars
 - Preview image renders in-bounds device dots for shared links
 - Route pruning via neighbor-aware closest-hop selection + max hop distance (configurable)
@@ -165,6 +165,7 @@ Map + LOS:
 - `MAP_RADIUS_KM` (`0` disables radius filtering; `.env.example` uses `241.4` km ≈ 150mi)
 - `MAP_RADIUS_SHOW` (`true` draws the radius debug circle)
 - `LOS_ELEVATION_URL` (elevation API for LOS tool)
+- `LOS_ELEVATION_PROXY_URL` (server proxy for client-side LOS elevation fetches)
 - `LOS_SAMPLE_MIN` / `LOS_SAMPLE_MAX` / `LOS_SAMPLE_STEP_METERS`
 - `ELEVATION_CACHE_TTL` (seconds)
 - `LOS_PEAKS_MAX` (max peaks shown on LOS profile)
@@ -214,9 +215,9 @@ Use it:
 - MQTT disconnects are handled; the client will reconnect when the broker returns.
 - Live route IDs are observer-aware (`message_hash:receiver_id`) so the same
   message seen by multiple MQTT observers does not overwrite active lines.
-- Line-of-sight tool: click **LOS tool** and pick two points, or **Shift+click** two nodes to measure LOS between them.
+- Line-of-sight tool: click **LOS tool** and pick two points, or **Shift+click** two nodes to measure LOS between them. Drag endpoints or select A/B then click the map to move that point.
 - On mobile, long‑press a node to select it for LOS.
-- LOS runs server-side via `/los` (no client-side elevation fetch).
+- LOS elevations are fetched via `/los/elevations` and LOS/relay math runs client-side (with `/los` fallback).
 - History tool always loads off (use the button or `history=on` in the URL).
 - Peers tool uses route history segments; forced MQTT listeners are excluded from peer lists.
 - URL params override stored settings: `lat`, `lon`/`lng`/`long`, `zoom`, `layer`, `history`, `heat`, `labels`, `nodes`, `legend`, `menu`, `units`, `history_filter`.

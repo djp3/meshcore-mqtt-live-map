@@ -157,6 +157,9 @@ PROD_TOKEN = os.getenv("PROD_TOKEN", "").strip()
 LOS_ELEVATION_URL = os.getenv(
   "LOS_ELEVATION_URL", "https://api.opentopodata.org/v1/srtm90m"
 )
+LOS_ELEVATION_PROXY_URL = os.getenv(
+  "LOS_ELEVATION_PROXY_URL", "/los/elevations"
+).strip()
 LOS_SAMPLE_MIN = int(os.getenv("LOS_SAMPLE_MIN", "10"))
 LOS_SAMPLE_MAX = int(os.getenv("LOS_SAMPLE_MAX", "80"))
 LOS_SAMPLE_STEP_METERS = int(os.getenv("LOS_SAMPLE_STEP_METERS", "250"))

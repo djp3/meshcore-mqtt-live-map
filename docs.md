@@ -1,13 +1,13 @@
 # Mesh Map Live: Implementation Notes
 
 This document captures the state of the project and the key changes made so far, so a new Codex session can pick up without losing context.
-Current version: `1.2.6` (see `VERSIONS.md`).
+Current version: `1.3.0` (see `VERSIONS.md`).
 
 ## Overview
 This project renders live MeshCore traffic on a Leaflet + OpenStreetMap map. A FastAPI backend subscribes to MQTT (WSS/TLS or TCP), decodes MeshCore packets using `@michaelhart/meshcore-decoder`, and broadcasts device updates and routes over WebSockets to the frontend. Core logic is split into config/state/decoder/LOS/history modules so changes are localized. The UI includes heatmap, LOS tools, map mode toggles, and a 24‑hour route history layer.
 
 ## Versioning
-- `VERSION.txt` holds the current version string (`1.2.6`).
+- `VERSION.txt` holds the current version string (`1.3.0`).
 - `VERSIONS.md` is an append-only changelog by version.
 
 ## Key Paths
@@ -103,14 +103,15 @@ This project renders live MeshCore traffic on a Leaflet + OpenStreetMap map. A F
 - HUD scrollbars are custom styled in Chromium for a cleaner look.
 
 ## LOS (Line of Sight) Tool
-- LOS runs **server-side only** via `/los` (no client-side elevation fetch).
+- LOS elevations are fetched via `/los/elevations` (proxy for `LOS_ELEVATION_URL`) and the LOS/relay/profile math runs client-side for realtime updates (fallbacks still use `/los`).
 - UI draws an LOS line (green clear / red blocked), renders an elevation profile, and marks peaks.
-- When blocked, the server can return a relay suggestion marker (amber/green).
+- When blocked, a relay suggestion marker (amber/green) highlights a potential mid-point.
 - Peak markers show coords + elevation and copy coords on click.
 - Hovering the profile or the LOS line syncs a cursor tooltip on the profile.
 - Hovering the LOS profile also tracks a cursor on the map and highlights nearby peaks.
 - LOS legend items (clear/blocked/peaks/relay) are hidden unless the LOS tool is active.
-- Shift+click nodes (or long‑press on mobile) or click two points on the map to run LOS.
+- Shift+click nodes (or long‑press on mobile) or click two points on the map to run LOS. Drag endpoints to update LOS in realtime.
+- After LOS is locked, click a point marker (A/B) to select it, then click the map to reposition that specific endpoint.
 
 ## Device Names + Roles
 - Names come from advert payloads or status messages when available.
@@ -171,7 +172,7 @@ If routes aren’t visible:
 - UI: route legend, role legend, and improved marker styles.
 - Roles now apply to advertised pubkey, not receiver.
 - Docker restarts are required after file changes (always run `docker compose up -d --build`).
-- LOS is server-side only; elevation profile/peaks are returned by `/los`.
+- LOS elevations are proxied via `/los/elevations` and LOS/relay computations run client-side (with `/los` fallback).
 - MQTT online indicator (green outline + legend) and configurable online window.
 - Filters out `0,0` GPS points from devices, trails, and routes (including string values).
 - Added 24h route history storage + history toggle with volume-based colors.
