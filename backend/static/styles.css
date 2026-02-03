@@ -483,6 +483,25 @@
       box-sizing: border-box;
     }
 
+    .los-point-icon {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #fbbf24;
+      border: 2px solid #f59e0b;
+      box-shadow: 0 0 0 2px rgba(15, 23, 42, .5);
+      cursor: grab;
+    }
+
+    .los-point-icon.dragging {
+      cursor: grabbing;
+      transform: scale(1.05);
+    }
+
+    .los-point-icon.selected {
+      box-shadow: 0 0 0 2px rgba(15, 23, 42, .5), 0 0 0 5px rgba(245, 158, 11, .35);
+    }
+
     .los-panel.active {
       display: block;
     }

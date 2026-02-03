@@ -130,6 +130,19 @@ const hopLayer = L.layerGroup();
 const hopMarkers = new Map(); // route_id -> [markers]
 let hopsVisible = false;
 const losElevationUrl = config.losElevationUrl || 'https://api.opentopodata.org/v1/srtm90m';
+const losElevationProxyUrl = (config.losElevationProxyUrl || '/los/elevations').trim();
+const losElevationFetchUrl = (() => {
+  if (!losElevationUrl) return losElevationProxyUrl;
+  try {
+    const parsed = new URL(losElevationUrl, window.location.origin);
+    if (parsed.origin === window.location.origin) {
+      return parsed.toString();
+    }
+  } catch (err) {
+    // ignore malformed URL and fall back to proxy
+  }
+  return losElevationProxyUrl || losElevationUrl;
+})();
 const losSampleMin = Number(config.losSampleMin) || 10;
 const losSampleMax = Number(config.losSampleMax) || 80;
 const losSampleStepMeters = Number(config.losSampleStepMeters) || 250;
@@ -147,6 +160,11 @@ const heatLayer = heatAvailable ? L.heatLayer([], {
 const heatPoints = [];
 const HEAT_TTL_MS = 10 * 60 * 1000;
 const losLayer = L.layerGroup().addTo(map);
+const losPointIcon = L.divIcon({
+  className: 'los-point-icon',
+  iconSize: [14, 14],
+  iconAnchor: [7, 7]
+});
 const coverageApiUrl = (config.coverageApiUrl || '').trim();
 const customLinkUrl = (config.customLinkUrl || '').trim();
 const coverageEnabled = Boolean(coverageApiUrl);
@@ -161,6 +179,23 @@ let losPeakMarkers = [];
 let losHoverMarker = null;
 let losActivePeak = null;
 let losLocked = false;
+let losDragging = false;
+let losComputeToken = 0;
+let losComputeLast = 0;
+let losComputeTimer = null;
+const LOS_COMPUTE_THROTTLE_MS = 100;
+const LOS_FINAL_DEBOUNCE_MS = 220;
+const LOS_ELEVATION_CACHE_PRECISION = 4;
+const LOS_ELEVATION_CACHE_STEP = 1 / Math.pow(10, LOS_ELEVATION_CACHE_PRECISION);
+const LOS_ELEVATION_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const LOS_ELEVATION_CACHE_MAX = 4000;
+const losElevationCache = new Map();
+const LOS_ELEVATION_FETCH_MIN_MS = 500;
+const LOS_ELEVATION_BACKOFF_MS = 2500;
+let losElevationLastFetchMs = 0;
+let losElevationBackoffUntil = 0;
+let losLastElevations = null;
+let losLastElevationCount = 0;
 let lastLosDistance = null;
 let lastLosStatusMeta = null;
 const losProfile = document.getElementById('los-profile');
@@ -194,6 +229,7 @@ let activeRouteDetailsId = null;
 let losProfileData = [];
 let losProfileMeta = null;
 let losPointMarkers = [];
+let losSelectedPointIndex = null;
 const storedLosHeightA = parseNumberParam(localStorage.getItem('meshmapLosHeightA'));
 const storedLosHeightB = parseNumberParam(localStorage.getItem('meshmapLosHeightB'));
 let losHeightA = Number.isFinite(storedLosHeightA) ? storedLosHeightA : 0;
@@ -1410,21 +1446,22 @@ function clearLos() {
   losSuggestion = null;
   losLocked = false;
   lastLosStatusMeta = null;
+  if (losComputeTimer) {
+    clearTimeout(losComputeTimer);
+    losComputeTimer = null;
+  }
+  losComputeToken += 1;
+  losComputeLast = 0;
   losLayer.clearLayers();
   setLosStatus('');
   clearLosProfile();
   clearLosPeaks();
   clearLosHoverMarker();
+  losSelectedPointIndex = null;
   losPointMarkers = [];
   if (keptPoint) {
     losPoints = [keptPoint];
-    const marker = L.circleMarker(keptPoint, {
-      radius: 5,
-      color: '#fbbf24',
-      fillColor: '#fbbf24',
-      fillOpacity: 0.9,
-      weight: 2
-    }).addTo(losLayer);
+    const marker = createLosPointMarker(keptPoint, 0);
     losPointMarkers.push(marker);
     setLosStatus('LOS: select second point');
   }
@@ -1823,28 +1860,14 @@ function renderLosPeaks(peaks) {
   });
 }
 
-async function runLosCheckServer(a, b) {
-  const heightA = Number.isFinite(losHeightA) ? losHeightA : 0;
-  const heightB = Number.isFinite(losHeightB) ? losHeightB : 0;
-  const params = new URLSearchParams({
-    lat1: a.lat.toFixed(6),
-    lon1: a.lng.toFixed(6),
-    lat2: b.lat.toFixed(6),
-    lon2: b.lng.toFixed(6),
-    h1: heightA.toFixed(2),
-    h2: heightB.toFixed(2),
-  });
-  const res = await fetch(`/los?${params.toString()}`);
-  const data = await res.json();
-  if (!data.ok) {
-    lastLosStatusMeta = null;
-    setLosStatus(`LOS: ${data.error || 'failed'}`);
-    if (losLine) {
-      losLine.setStyle({ color: '#9ca3af', weight: 4, opacity: 0.8, dashArray: '6 10' });
+function applyLosResult(data) {
+  if (!data || !data.ok) return false;
+  if (Array.isArray(data.profile) && data.profile.length > 1) {
+    const terrain = data.profile.map(item => Number(item[1]));
+    if (terrain.every(val => Number.isFinite(val))) {
+      losLastElevations = terrain;
+      losLastElevationCount = terrain.length;
     }
-    clearLosProfile();
-    clearLosPeaks();
-    return false;
   }
   const blocked = data.blocked;
   const meters = data.distance_m != null ? Number(data.distance_m) : null;
@@ -1889,7 +1912,85 @@ async function runLosCheckServer(a, b) {
       dashArray: blocked ? '4 10' : null
     });
   }
+  clearLosProfileHover();
   return true;
+}
+
+async function runLosCheckClient(a, b, options = {}) {
+  const heightA = Number.isFinite(losHeightA) ? losHeightA : 0;
+  const heightB = Number.isFinite(losHeightB) ? losHeightB : 0;
+  const distanceMeters = haversineMeters(a.lat, a.lng, b.lat, b.lng);
+  if (distanceMeters <= 0) {
+    return { ok: false, error: 'invalid_distance' };
+  }
+  const points = sampleLosPoints(a.lat, a.lng, b.lat, b.lng);
+  const elevationResponse = await fetchElevations(points, options);
+  if (!elevationResponse.ok) {
+    return {
+      ok: false,
+      error: elevationResponse.error || 'elevation_failed',
+      rateLimited: elevationResponse.rateLimited === true
+    };
+  }
+  const elevations = elevationResponse.elevations || [];
+  if (elevations.length !== points.length) {
+    return { ok: false, error: 'elevation_failed:unexpected_length' };
+  }
+  if (!elevationResponse.approximate || !losLastElevations) {
+    losLastElevations = elevations.slice();
+    losLastElevationCount = elevations.length;
+  }
+  const adjusted = elevations.slice();
+  const startElev = elevations[0] + heightA;
+  const endElev = elevations[elevations.length - 1] + heightB;
+  adjusted[0] = startElev;
+  adjusted[adjusted.length - 1] = endElev;
+  const maxObstruction = losMaxObstruction(points, adjusted, 0, points.length - 1);
+  const blocked = maxObstruction > 0;
+  const suggestion = blocked ? findLosSuggestion(points, adjusted) : null;
+  const round2 = (value) => Number(value.toFixed(2));
+  const profile = points.map((point, idx) => {
+    const lineElev = startElev + (endElev - startElev) * point.t;
+    return [
+      round2(distanceMeters * point.t),
+      round2(elevations[idx]),
+      round2(lineElev)
+    ];
+  });
+  return {
+    ok: true,
+    blocked,
+    max_obstruction_m: round2(maxObstruction),
+    distance_m: round2(distanceMeters),
+    profile,
+    peaks: findLosPeaks(points, elevations, distanceMeters),
+    suggested: suggestion,
+    approximate: elevationResponse.approximate === true,
+    rateLimited: elevationResponse.rateLimited === true
+  };
+}
+
+async function fetchLosServerResult(a, b) {
+  const heightA = Number.isFinite(losHeightA) ? losHeightA : 0;
+  const heightB = Number.isFinite(losHeightB) ? losHeightB : 0;
+  const params = new URLSearchParams({
+    lat1: a.lat.toFixed(6),
+    lon1: a.lng.toFixed(6),
+    lat2: b.lat.toFixed(6),
+    lon2: b.lng.toFixed(6),
+    h1: heightA.toFixed(2),
+    h2: heightB.toFixed(2),
+  });
+  try {
+    const res = await fetch(`/los?${params.toString()}`);
+    const data = await res.json();
+    if (!data.ok) {
+      return { ok: false, error: data.error || 'failed' };
+    }
+    return data;
+  } catch (err) {
+    return { ok: false, error: 'los_server_failed' };
+  }
 }
 
 function resetPropagationRaster() {
@@ -2000,6 +2101,7 @@ function isMultiOriginEnabled() {
 
 function getPropagationConfig() {
   const txInput = document.getElementById('prop-txpower');
+  const txGainInput = document.getElementById('prop-tx-gain');
   const opacityInput = document.getElementById('prop-opacity');
   const modelSelect = document.getElementById('prop-model');
   const terrainInput = document.getElementById('prop-terrain');
@@ -2016,10 +2118,11 @@ function getPropagationConfig() {
   const gridInput = document.getElementById('prop-grid');
   const sampleInput = document.getElementById('prop-sample');
   const rangeFactorInput = document.getElementById('prop-range-factor');
-  if (!txInput || !opacityInput || !modelSelect || !terrainInput || !txAglInput || !rxAglInput || !txMslInput || !rxMslInput || !minRxInput || !autoRangeInput || !fadeMarginInput || !webGpuInput || !autoResInput || !maxCellsInput || !gridInput || !sampleInput || !rangeFactorInput) {
+  if (!txInput || !txGainInput || !opacityInput || !modelSelect || !terrainInput || !txAglInput || !rxAglInput || !txMslInput || !rxMslInput || !minRxInput || !autoRangeInput || !fadeMarginInput || !webGpuInput || !autoResInput || !maxCellsInput || !gridInput || !sampleInput || !rangeFactorInput) {
     return null;
   }
   const txPower = Number(txInput.value);
+  const txAntennaGainDb = Number(txGainInput.value);
   const opacity = Number(opacityInput.value);
   const model = PROP_MODELS[modelSelect.value] || PROP_MODELS.suburban;
   const terrain = terrainInput.checked;
@@ -2039,6 +2142,7 @@ function getPropagationConfig() {
   if (!Number.isFinite(txPower) || !Number.isFinite(opacity)) return null;
   return {
     txPower,
+    txAntennaGainDb: Number.isFinite(txAntennaGainDb) ? Math.min(20, Math.max(-10, txAntennaGainDb)) : PROP_DEFAULTS.txAntennaGainDb,
     opacity: Math.min(0.9, Math.max(0.05, opacity)),
     model,
     terrain,
@@ -2203,7 +2307,7 @@ function updatePropagationSummary() {
     PROP_DEFAULTS.noiseFigureDb,
     PROP_DEFAULTS.snrMinDb
   );
-  const effectiveTxPower = config.txPower + PROP_DEFAULTS.txAntennaGainDb;
+  const effectiveTxPower = config.txPower + config.txAntennaGainDb;
   const maxPathLoss = config.autoRange
     ? (effectiveTxPower - config.minRxDbm)
     : calcMaxPathLossDb(effectiveTxPower, sensitivity, PROP_DEFAULTS.fadeMarginDb);
@@ -2807,7 +2911,7 @@ async function renderPropagationRaster() {
     PROP_DEFAULTS.noiseFigureDb,
     PROP_DEFAULTS.snrMinDb
   );
-  const effectiveTxPower = config.txPower + PROP_DEFAULTS.txAntennaGainDb;
+  const effectiveTxPower = config.txPower + config.txAntennaGainDb;
   const maxPathLoss = config.autoRange
     ? (effectiveTxPower - config.minRxDbm)
     : calcMaxPathLossDb(effectiveTxPower, sensitivity, PROP_DEFAULTS.fadeMarginDb);
@@ -3011,19 +3115,222 @@ function sampleLosPoints(lat1, lon1, lat2, lon2) {
   return points;
 }
 
-async function fetchElevations(points) {
-  if (!losElevationUrl) {
+function losElevationCacheKey(lat, lon, precision = LOS_ELEVATION_CACHE_PRECISION) {
+  const safeLat = Number(lat);
+  const safeLon = Number(lon);
+  if (!Number.isFinite(safeLat) || !Number.isFinite(safeLon)) return null;
+  return `${safeLat.toFixed(precision)},${safeLon.toFixed(precision)}`;
+}
+
+function cacheLosElevation(key, value, now) {
+  if (!key || !Number.isFinite(value)) return;
+  losElevationCache.set(key, { value, ts: now });
+  if (losElevationCache.size <= LOS_ELEVATION_CACHE_MAX) return;
+  const excess = losElevationCache.size - LOS_ELEVATION_CACHE_MAX;
+  const keys = losElevationCache.keys();
+  for (let i = 0; i < excess; i += 1) {
+    const next = keys.next();
+    if (next.done) break;
+    losElevationCache.delete(next.value);
+  }
+}
+
+function approximateElevationsFromLast(count) {
+  if (!losLastElevations || losLastElevations.length < 2) return null;
+  const source = losLastElevations;
+  const srcCount = source.length;
+  const target = new Array(count);
+  if (srcCount === count) {
+    for (let i = 0; i < count; i += 1) {
+      target[i] = source[i];
+    }
+    return target;
+  }
+  if (count === 1) {
+    target[0] = source[0];
+    return target;
+  }
+  for (let i = 0; i < count; i += 1) {
+    const t = i / (count - 1);
+    const pos = t * (srcCount - 1);
+    const idx = Math.floor(pos);
+    const frac = pos - idx;
+    const a = source[idx];
+    const b = source[Math.min(srcCount - 1, idx + 1)];
+    target[i] = a + (b - a) * frac;
+  }
+  return target;
+}
+
+function flatElevations(count) {
+  if (count <= 0) return [];
+  const values = new Array(count);
+  for (let i = 0; i < count; i += 1) {
+    values[i] = 0;
+  }
+  return values;
+}
+
+function getCachedElevation(lat, lon, now, allowNeighbor = false) {
+  const key = losElevationCacheKey(lat, lon);
+  if (key) {
+    const cached = losElevationCache.get(key);
+    if (cached) {
+      if (now - cached.ts <= LOS_ELEVATION_CACHE_TTL_MS) {
+        return { value: cached.value, key };
+      }
+      losElevationCache.delete(key);
+    }
+  }
+  if (!allowNeighbor) return null;
+  let best = null;
+  for (let dx = -1; dx <= 1; dx += 1) {
+    for (let dy = -1; dy <= 1; dy += 1) {
+      if (dx === 0 && dy === 0) continue;
+      const nLat = Number(lat) + dx * LOS_ELEVATION_CACHE_STEP;
+      const nLon = Number(lon) + dy * LOS_ELEVATION_CACHE_STEP;
+      const nKey = losElevationCacheKey(nLat, nLon);
+      if (!nKey) continue;
+      const cached = losElevationCache.get(nKey);
+      if (!cached) continue;
+      if (now - cached.ts > LOS_ELEVATION_CACHE_TTL_MS) {
+        losElevationCache.delete(nKey);
+        continue;
+      }
+      const dist = Math.abs(dx) + Math.abs(dy);
+      if (!best || dist < best.dist) {
+        best = { value: cached.value, key: nKey, dist };
+      }
+    }
+  }
+  return best ? { value: best.value, key: best.key } : null;
+}
+
+function interpolateElevations(values) {
+  const count = values.length;
+  let lastKnown = null;
+  for (let i = 0; i < count; i += 1) {
+    if (!Number.isFinite(values[i])) continue;
+    if (lastKnown != null && i - lastKnown > 1) {
+      const startVal = values[lastKnown];
+      const endVal = values[i];
+      const span = i - lastKnown;
+      for (let j = lastKnown + 1; j < i; j += 1) {
+        const t = (j - lastKnown) / span;
+        values[j] = startVal + (endVal - startVal) * t;
+      }
+    }
+    lastKnown = i;
+  }
+  if (lastKnown == null) return false;
+  // Fill leading/trailing gaps with nearest known value.
+  let firstKnown = values.findIndex(val => Number.isFinite(val));
+  if (firstKnown > 0) {
+    for (let i = 0; i < firstKnown; i += 1) {
+      values[i] = values[firstKnown];
+    }
+  }
+  if (lastKnown < count - 1) {
+    for (let i = lastKnown + 1; i < count; i += 1) {
+      values[i] = values[lastKnown];
+    }
+  }
+  return true;
+}
+
+async function fetchElevations(points, options = {}) {
+  if (!losElevationFetchUrl) {
     return { ok: false, error: 'no_elevation_url' };
   }
+  const allowNetwork = options.allowNetwork !== false;
+  const allowApprox = options.allowApprox === true;
+  const forceNetwork = options.forceNetwork === true;
+  const now = Date.now();
   const results = new Array(points.length);
+  const missing = [];
+  points.forEach((point, idx) => {
+    const cached = getCachedElevation(point.lat, point.lon, now, allowApprox);
+    if (!cached) {
+      missing.push({ idx, point, key: null });
+      return;
+    }
+    results[idx] = cached.value;
+    missing.push({ idx, point, key: cached.key, missing: false });
+  });
+  const unresolved = missing.filter(entry => entry.missing !== false && entry.key === null);
+  if (!unresolved.length) {
+    return { ok: true, elevations: results };
+  }
+  if (!allowNetwork) {
+    const ok = interpolateElevations(results);
+    if (!ok) {
+      const fallback = allowApprox ? approximateElevationsFromLast(points.length) : null;
+      if (fallback) {
+        return { ok: true, elevations: fallback, approximate: true, fallback: true };
+      }
+      if (allowApprox) {
+        return { ok: true, elevations: flatElevations(points.length), approximate: true, fallback: true };
+      }
+      return { ok: false, error: 'elevation_cache_miss' };
+    }
+    return { ok: true, elevations: results, approximate: true };
+  }
+  if (!forceNetwork) {
+    if (now < losElevationBackoffUntil) {
+      const ok = interpolateElevations(results);
+      if (ok) {
+        return { ok: true, elevations: results, approximate: true, rateLimited: true };
+      }
+      const fallback = allowApprox ? approximateElevationsFromLast(points.length) : null;
+      if (fallback) {
+        return { ok: true, elevations: fallback, approximate: true, rateLimited: true, fallback: true };
+      }
+      if (allowApprox) {
+        return { ok: true, elevations: flatElevations(points.length), approximate: true, rateLimited: true, fallback: true };
+      }
+      return { ok: false, error: 'elevation_rate_limited', rateLimited: true };
+    }
+    if (now - losElevationLastFetchMs < LOS_ELEVATION_FETCH_MIN_MS) {
+      const ok = interpolateElevations(results);
+      if (ok) {
+        return { ok: true, elevations: results, approximate: true, rateLimited: true };
+      }
+      const fallback = allowApprox ? approximateElevationsFromLast(points.length) : null;
+      if (fallback) {
+        return { ok: true, elevations: fallback, approximate: true, rateLimited: true, fallback: true };
+      }
+      if (allowApprox) {
+        return { ok: true, elevations: flatElevations(points.length), approximate: true, rateLimited: true, fallback: true };
+      }
+      return { ok: false, error: 'elevation_rate_limited', rateLimited: true };
+    }
+  }
+  losElevationLastFetchMs = now;
   const chunkSize = 100;
-  for (let start = 0; start < points.length; start += chunkSize) {
-    const chunk = points.slice(start, start + chunkSize);
-    const locations = chunk.map(p => `${p.lat},${p.lon}`).join('|');
-    const url = `${losElevationUrl}?locations=${encodeURIComponent(locations)}`;
+  const fetchTargets = unresolved;
+  for (let start = 0; start < fetchTargets.length; start += chunkSize) {
+    const chunk = fetchTargets.slice(start, start + chunkSize);
+    const locations = chunk.map(entry => `${entry.point.lat},${entry.point.lon}`).join('|');
+    const url = new URL(losElevationFetchUrl, window.location.origin);
+    url.searchParams.set('locations', locations);
     let payload;
     try {
-      const res = await fetch(url);
+      const res = await fetch(url.toString());
+      if (res.status === 429) {
+        losElevationBackoffUntil = Date.now() + LOS_ELEVATION_BACKOFF_MS;
+        const ok = interpolateElevations(results);
+        if (ok) {
+          return { ok: true, elevations: results, approximate: true, rateLimited: true };
+        }
+        const fallback = allowApprox ? approximateElevationsFromLast(points.length) : null;
+        if (fallback) {
+          return { ok: true, elevations: fallback, approximate: true, rateLimited: true, fallback: true };
+        }
+        if (allowApprox) {
+          return { ok: true, elevations: flatElevations(points.length), approximate: true, rateLimited: true, fallback: true };
+        }
+        return { ok: false, error: 'elevation_rate_limited', rateLimited: true };
+      }
       payload = await res.json();
     } catch (err) {
       return { ok: false, error: 'elevation_fetch_failed' };
@@ -3036,7 +3343,11 @@ async function fetchElevations(points) {
       return { ok: false, error: 'elevation_fetch_failed:unexpected_length' };
     }
     elevs.forEach((entry, idx) => {
-      results[start + idx] = Number(entry.elevation);
+      const elev = Number(entry.elevation);
+      const target = chunk[idx];
+      results[target.idx] = elev;
+      const key = target.key || losElevationCacheKey(target.point.lat, target.point.lon);
+      cacheLosElevation(key, elev, now);
     });
   }
   if (results.some(val => val == null || Number.isNaN(val))) {
@@ -4014,19 +4325,49 @@ function connectWS() {
   };
 }
 
-async function runLosCheck() {
+async function runLosCheck(options = {}) {
   if (losPoints.length < 2) return;
   const [a, b] = losPoints;
+  losComputeLast = Date.now();
+  const token = ++losComputeToken;
+  const allowNetwork = options.allowNetwork !== false;
+  const allowApprox = options.allowApprox === true;
   setLosStatus('LOS: calculating...');
   try {
-    const distanceMeters = haversineMeters(a.lat, a.lng, b.lat, b.lng);
-    if (distanceMeters <= 0) {
+    if (losLine) {
+      losLine.setStyle({ color: '#9ca3af', weight: 4, opacity: 0.8, dashArray: '6 10' });
+    }
+    const clientResult = await runLosCheckClient(a, b, {
+      allowNetwork,
+      allowApprox,
+      forceNetwork: options.forceNetwork === true
+    });
+    if (token !== losComputeToken) return;
+    if (clientResult.ok && applyLosResult(clientResult)) {
+      return;
+    }
+    if (clientResult.error === 'invalid_distance') {
+      lastLosStatusMeta = null;
       setLosStatus('LOS: invalid distance');
       return;
     }
-    const ok = await runLosCheckServer(a, b);
-    if (ok) return;
-    setLosStatus('LOS: error');
+    if (!allowNetwork || clientResult.rateLimited) {
+      if (clientResult.error === 'elevation_cache_miss') {
+        setLosStatus('LOS: waiting for elevation data');
+      } else if (clientResult.rateLimited) {
+        setLosStatus('LOS: rate limited, using cached terrain');
+      } else {
+        setLosStatus(`LOS: ${clientResult.error || 'error'}`);
+      }
+      return;
+    }
+    const serverResult = await fetchLosServerResult(a, b);
+    if (token !== losComputeToken) return;
+    if (serverResult.ok && applyLosResult(serverResult)) {
+      return;
+    }
+    lastLosStatusMeta = null;
+    setLosStatus(`LOS: ${serverResult.error || clientResult.error || 'error'}`);
     if (losLine) {
       losLine.setStyle({ color: '#9ca3af', weight: 4, opacity: 0.8, dashArray: '6 10' });
     }
@@ -4034,10 +4375,37 @@ async function runLosCheck() {
     clearLosPeaks();
   } catch (err) {
     console.warn('los failed', err);
+    lastLosStatusMeta = null;
     setLosStatus('LOS: error');
     clearLosProfile();
     clearLosPeaks();
   }
+}
+
+let losPendingOptions = null;
+function scheduleLosCheck(force = false, options = {}) {
+  if (losPoints.length < 2) return;
+  losPendingOptions = options;
+  if (force) {
+    if (losComputeTimer) {
+      clearTimeout(losComputeTimer);
+      losComputeTimer = null;
+    }
+    runLosCheck(options);
+    return;
+  }
+  const now = Date.now();
+  const elapsed = now - losComputeLast;
+  const delay = Math.max(0, LOS_COMPUTE_THROTTLE_MS - elapsed);
+  if (delay === 0) {
+    runLosCheck(options);
+    return;
+  }
+  if (losComputeTimer) return;
+  losComputeTimer = setTimeout(() => {
+    losComputeTimer = null;
+    runLosCheck(losPendingOptions || {});
+  }, delay);
 }
 
 initialSnapshot();
@@ -4346,7 +4714,7 @@ const handleLosHeightChange = () => {
     // ignore storage failures
   }
   if (losPoints.length === 2) {
-    runLosCheck();
+    scheduleLosCheck(true, { allowNetwork: true, forceNetwork: true });
   }
 };
 if (losHeightAInput) {
@@ -4358,20 +4726,87 @@ if (losHeightBInput) {
   losHeightBInput.addEventListener('change', handleLosHeightChange);
 }
 
+function updateLosLineFromPoints() {
+  if (!losLine || losPoints.length < 2) return;
+  losLine.setLatLngs([losPoints[0], losPoints[1]]);
+}
+
+function updateLosPointPosition(index, latlng) {
+  if (index == null || !losPoints[index]) return;
+  losPoints[index] = latlng;
+  updateLosLineFromPoints();
+  if (losLine && losPoints.length >= 2) {
+    lastLosStatusMeta = null;
+    losLine.setStyle({ color: '#9ca3af', weight: 4, opacity: 0.8, dashArray: '6 10' });
+    setLosStatus('LOS: calculating...');
+  }
+}
+
+function setLosSelectedPoint(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= losPointMarkers.length) {
+    losSelectedPointIndex = null;
+  } else {
+    losSelectedPointIndex = index;
+  }
+  losPointMarkers.forEach((pointMarker, idx) => {
+    const el = pointMarker && pointMarker.getElement ? pointMarker.getElement() : null;
+    if (!el) return;
+    el.classList.toggle('selected', losSelectedPointIndex === idx);
+  });
+}
+
+function createLosPointMarker(latlng, index) {
+  const marker = L.marker(latlng, {
+    icon: losPointIcon,
+    draggable: true,
+    autoPan: false,
+    zIndexOffset: 450
+  }).addTo(losLayer);
+  marker.__losIndex = index;
+  marker.on('click', (ev) => {
+    if (ev && ev.originalEvent) {
+      ev.originalEvent.preventDefault();
+      ev.originalEvent.stopPropagation();
+    }
+    if (typeof L !== 'undefined' && L.DomEvent) {
+      L.DomEvent.stop(ev);
+    }
+    setLosSelectedPoint(index);
+    setLosStatus(`LOS: selected point ${index === 0 ? 'A' : 'B'} (click map to move or drag point)`);
+  });
+  marker.on('dragstart', () => {
+    const el = marker.getElement();
+    if (el) el.classList.add('dragging');
+    setLosSelectedPoint(index);
+    losDragging = true;
+    clearLosProfileHover();
+  });
+  marker.on('drag', () => {
+    const next = marker.getLatLng();
+    updateLosPointPosition(index, next);
+    scheduleLosCheck(false, { allowNetwork: false, allowApprox: true });
+  });
+  marker.on('dragend', () => {
+    const el = marker.getElement();
+    if (el) el.classList.remove('dragging');
+    const next = marker.getLatLng();
+    updateLosPointPosition(index, next);
+    losDragging = false;
+    scheduleLosCheck(true, { allowNetwork: true, forceNetwork: true });
+  });
+  marker.on('add', () => setLosSelectedPoint(losSelectedPointIndex));
+  return marker;
+}
+
 function handleLosPoint(latlng) {
   if (losLocked || losPoints.length >= 2) {
     setLosStatus('LOS: Clear to start a new path');
     return;
   }
   losPoints.push(latlng);
-  const marker = L.circleMarker(latlng, {
-    radius: 5,
-    color: '#fbbf24',
-    fillColor: '#fbbf24',
-    fillOpacity: 0.9,
-    weight: 2
-  }).addTo(losLayer);
+  const marker = createLosPointMarker(latlng, losPoints.length - 1);
   losPointMarkers.push(marker);
+  setLosSelectedPoint(losPoints.length - 1);
 
   if (losPoints.length === 1) {
     setLosStatus('LOS: select second point');
@@ -4391,7 +4826,7 @@ function handleLosPoint(latlng) {
       }
     });
     losLine.on('mouseout', clearLosProfileHover);
-    runLosCheck();
+    scheduleLosCheck(true, { allowNetwork: true, forceNetwork: true });
   }
 }
 
@@ -4517,6 +4952,7 @@ if (coverageToggle && coverageEnabled) {
 
 const propToggle = document.getElementById('prop-toggle');
 const propTxInput = document.getElementById('prop-txpower');
+const propTxGainInput = document.getElementById('prop-tx-gain');
 const propOpacityInput = document.getElementById('prop-opacity');
 const propModelSelect = document.getElementById('prop-model');
 const propTerrainInput = document.getElementById('prop-terrain');
@@ -4542,6 +4978,16 @@ if (propTxInput) {
   if (storedTx !== null) propTxInput.value = storedTx;
   propTxInput.addEventListener('input', () => {
     localStorage.setItem('meshmapPropTxPower', propTxInput.value);
+    updatePropagationSummary();
+    markPropagationDirty();
+  });
+}
+
+if (propTxGainInput) {
+  const storedTxGain = localStorage.getItem('meshmapPropTxGain');
+  if (storedTxGain !== null) propTxGainInput.value = storedTxGain;
+  propTxGainInput.addEventListener('input', () => {
+    localStorage.setItem('meshmapPropTxGain', propTxGainInput.value);
     updatePropagationSummary();
     markPropagationDirty();
   });
@@ -4784,6 +5230,15 @@ map.on('click', (ev) => {
     return;
   }
   if (losActive) {
+    if (losLocked && losSelectedPointIndex != null) {
+      const idx = losSelectedPointIndex;
+      if (losPointMarkers[idx]) {
+        losPointMarkers[idx].setLatLng(ev.latlng);
+      }
+      updateLosPointPosition(idx, ev.latlng);
+      scheduleLosCheck(true, { allowNetwork: true, forceNetwork: true });
+      return;
+    }
     handleLosPoint(ev.latlng);
     return;
   }

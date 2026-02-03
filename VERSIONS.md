@@ -1,5 +1,31 @@
 # Versions
 
+## v1.3.1 (02-03-2026)
+- Propagation tool now includes an adjustable **TX antenna gain (dBi)** field that feeds directly into range and coverage calculations.
+- Propagation defaults now start with **Rx AGL = 1m** (previously 5m).
+- Credit: C2D.
+
+## v1.3.0 (02-03-2026)
+- LOS tool now supports realtime endpoint dragging with throttled live recompute for smoother interaction (PR #18, credit: https://github.com/mitchellmoss).
+- Added elevation fetch proxy endpoint (`/los/elevations`) with frontend caching/backoff to reduce API spam and avoid elevation rate-limit failures while dragging.
+- Added `LOS_ELEVATION_PROXY_URL` env/config support so LOS elevation requests can be routed through the backend.
+- Fixed LOS point repositioning so you can click/select point A/B and click the map to move that specific point (plus visual selected-point highlight).
+- Updated LOS docs and feature notes for the new realtime drag + proxy workflow.
+
+## v1.2.6 (02-02-2026)
+- API compatibility update for MeshBuddy and similar clients:
+  - `/api/nodes` now defaults to a flat payload (`"data": [...]`).
+  - Added top-level `"nodes": [...]` alias for legacy consumers.
+  - `updated_since` now applies delta filtering automatically.
+  - `mode=full` (or `all`/`snapshot`) forces full list responses.
+  - `format=nested` returns wrapped payloads (`"data":{"nodes":[...]}`).
+
+## v1.2.5 (02-02-2026)
+- Route line IDs are now observer-aware (`message_hash:receiver_id`) so simultaneous receptions from multiple MQTT observers do not overwrite each other.
+- WebSocket auth now accepts `?auth=<turnstile_token>` in addition to cookie/header auth, reducing reconnect loops during Turnstile-gated sessions.
+- PROD token checks now always require `PROD_TOKEN` for protected API routes; Turnstile session auth no longer bypasses API token requirements.
+- `ROUTE_INFRA_ONLY` endpoint logic was relaxed so direct routes can still render when at least one endpoint is infrastructure (repeater/room).
+
 ## v1.2.4 (01-29-2026)
 - Turnstile auth now grants access to `/snapshot`, `/stats`, `/peers`, and WebSocket without requiring a PROD token (prevents WS reconnect spam).
 - Show Hops panel now includes total route distance (sum of hop-to-hop segments) and updates live with unit toggles.

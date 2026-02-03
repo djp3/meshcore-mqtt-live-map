@@ -1,6 +1,6 @@
 # Mesh Live Map
 
-Version: `1.2.4` (see [VERSIONS.md](VERSIONS.md))
+Version: `1.3.1` (see [VERSIONS.md](VERSIONS.md))
 
 Live MeshCore traffic map that renders nodes, routes, and activity in real time on a Leaflet map. The backend subscribes to MQTT over WebSockets+TLS or TCP, decodes MeshCore packets with `@michaelhart/meshcore-decoder`, and streams updates to the browser via WebSockets.
 
@@ -25,20 +25,21 @@ Live example sites:
 - 24-hour route history tool with volume-based coloring, click-to-view packet details, a heat-band slider, and a link-size slider
 - History panel can be dismissed with an X without hiding history lines (re-open via History tool)
 - Peers tool showing incoming/outgoing neighbors with on-map lines (blue = incoming, purple = outgoing)
-- Coverage layer from a coverage map API (button hidden when not configured)
+- Coverage layer from a [coverage map API](https://github.com/nullrouten0/meshcore-coverage-map) (button hidden when not configured)
 - Update available banner (git local vs upstream) with dismiss
 - UI controls: legend toggle, dark map, topo map, units toggle (km/mi), labels toggle, hide nodes, heat toggle
 - Share button that copies a URL with current view + settings
 - URL parameters to open the map at a specific view (center, zoom, toggles)
 - Node search by name or public key
 - Adjustable node size slider (defaults from env, saves locally)
-- LOS tool with elevation profile + peak markers and hover sync (Shift+click or long‑press nodes)
+- LOS tool with elevation profile + peak markers, hover sync, and realtime draggable endpoints (Shift+click or long‑press nodes)
 - Embeddable metadata (Open Graph/Twitter tags) driven by env vars
 - Preview image renders in-bounds device dots for shared links
 - Route pruning via neighbor-aware closest-hop selection + max hop distance (configurable)
 - Route lines are derived from decoded packet paths only (no MQTT observer/receiver fallback)
 - First-hop collision fix prefers the closest repeater/room to the sender (Issue #11)
 - Propagation panel lives on the right and keeps the last render until you generate a new one (click an origin marker to remove it)
+- Propagation tool supports adjustable **TX antenna gain (dBi)**, and now defaults **Rx AGL** to **1m**
 - Installable PWA (manifest + service worker) for Add to Home Screen
 - Click the logo to hide/show the left HUD panel while tools stay open
 
@@ -165,6 +166,7 @@ Map + LOS:
 - `MAP_RADIUS_KM` (`0` disables radius filtering; `.env.example` uses `241.4` km ≈ 150mi)
 - `MAP_RADIUS_SHOW` (`true` draws the radius debug circle)
 - `LOS_ELEVATION_URL` (elevation API for LOS tool)
+- `LOS_ELEVATION_PROXY_URL` (server proxy for client-side LOS elevation fetches)
 - `LOS_SAMPLE_MIN` / `LOS_SAMPLE_MAX` / `LOS_SAMPLE_STEP_METERS`
 - `ELEVATION_CACHE_TTL` (seconds)
 - `LOS_PEAKS_MAX` (max peaks shown on LOS profile)
@@ -191,8 +193,10 @@ PROD_TOKEN=<random-string>
 
 Turnstile protection is also gated by `PROD_MODE=true`. If `PROD_MODE=false`,
 Turnstile stays off even when `TURNSTILE_ENABLED=true`.
-When Turnstile is enabled, its auth cookie now grants access to `/snapshot`, `/stats`,
-`/peers`, and the WebSocket without requiring a PROD token (prevents reconnect spam).
+When Turnstile is enabled, browser sessions can authenticate the map + WebSocket
+with a Turnstile auth token (`meshmap_auth` cookie or `?auth=` on `/ws`), but
+protected API routes (`/snapshot`, `/api/nodes`, `/peers/{id}`) still require
+`PROD_TOKEN`.
 Ensure `PROD_MODE`/`PROD_TOKEN` are set in `.env` (docker-compose passes them through).
 
 Generate a token:
@@ -210,14 +214,18 @@ Use it:
 - To see full paths, the feed must include Path/Trace packets (payload types 8/9).
 - Runtime state is persisted to `data/state.json`.
 - MQTT disconnects are handled; the client will reconnect when the broker returns.
-- Line-of-sight tool: click **LOS tool** and pick two points, or **Shift+click** two nodes to measure LOS between them.
+- Live route IDs are observer-aware (`message_hash:receiver_id`) so the same
+  message seen by multiple MQTT observers does not overwrite active lines.
+- Line-of-sight tool: click **LOS tool** and pick two points, or **Shift+click** two nodes to measure LOS between them. Drag endpoints or select A/B then click the map to move that point.
 - On mobile, long‑press a node to select it for LOS.
-- LOS runs server-side via `/los` (no client-side elevation fetch).
+- LOS elevations are fetched via `/los/elevations` and LOS/relay math runs client-side (with `/los` fallback).
 - History tool always loads off (use the button or `history=on` in the URL).
 - Peers tool uses route history segments; forced MQTT listeners are excluded from peer lists.
 - URL params override stored settings: `lat`, `lon`/`lng`/`long`, `zoom`, `layer`, `history`, `heat`, `labels`, `nodes`, `legend`, `menu`, `units`, `history_filter`.
 - Dark map also darkens node popups for readability.
 - Route styling uses payload type: 2/5 = Message (blue), 8/9 = Trace (orange), 4 = Advert (green).
+- Turnstile browser auth (`meshmap_auth`/`?auth=`) is for map + WS session flow;
+  protected API endpoints still require `PROD_TOKEN`.
 - If hop hashes collide, the backend prefers known neighbors (or overrides) before picking the closest hop and pruning beyond `ROUTE_MAX_HOP_DISTANCE`.
 - Coordinates at `0,0` (including string values) are filtered from devices, trails, and routes.
 - With Turnstile enabled, common embed bots (Discord, Slack, etc.) can be
@@ -227,15 +235,17 @@ Use it:
 The backend exposes a nodes API for external tools (e.g. MeshBuddy):
 
 - `GET /api/nodes?token=YOUR_TOKEN`
-  - Default response: `{"data":{"nodes":[...]}}`
-  - Optional: `format=flat` returns `{"data":[...]}`
-  - Optional: `mode=delta` applies `updated_since` filtering
+  - Default response: `{"data":[...], "nodes":[...]}`
+  - Optional: `format=nested` returns `{"data":{"nodes":[...]}}`
+  - `updated_since` applies delta filtering automatically
+  - Optional: `mode=full` (or `all`/`snapshot`) forces full-list response
 
 Example:
 ```
 https://your-host/api/nodes?token=YOUR_TOKEN
-https://your-host/api/nodes?token=YOUR_TOKEN&mode=delta&updated_since=2025-01-01T12:00:00Z
-https://your-host/api/nodes?token=YOUR_TOKEN&format=flat
+https://your-host/api/nodes?token=YOUR_TOKEN&updated_since=2025-01-01T12:00:00Z
+https://your-host/api/nodes?token=YOUR_TOKEN&format=nested
+https://your-host/api/nodes?token=YOUR_TOKEN&mode=full
 ```
 
 Each node includes:
