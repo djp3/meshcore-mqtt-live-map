@@ -229,6 +229,7 @@ let activeRouteDetailsId = null;
 let losProfileData = [];
 let losProfileMeta = null;
 let losPointMarkers = [];
+let losSelectedPointIndex = null;
 const storedLosHeightA = parseNumberParam(localStorage.getItem('meshmapLosHeightA'));
 const storedLosHeightB = parseNumberParam(localStorage.getItem('meshmapLosHeightB'));
 let losHeightA = Number.isFinite(storedLosHeightA) ? storedLosHeightA : 0;
@@ -1456,6 +1457,7 @@ function clearLos() {
   clearLosProfile();
   clearLosPeaks();
   clearLosHoverMarker();
+  losSelectedPointIndex = null;
   losPointMarkers = [];
   if (keptPoint) {
     losPoints = [keptPoint];
@@ -4737,6 +4739,19 @@ function updateLosPointPosition(index, latlng) {
   }
 }
 
+function setLosSelectedPoint(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= losPointMarkers.length) {
+    losSelectedPointIndex = null;
+  } else {
+    losSelectedPointIndex = index;
+  }
+  losPointMarkers.forEach((pointMarker, idx) => {
+    const el = pointMarker && pointMarker.getElement ? pointMarker.getElement() : null;
+    if (!el) return;
+    el.classList.toggle('selected', losSelectedPointIndex === idx);
+  });
+}
+
 function createLosPointMarker(latlng, index) {
   const marker = L.marker(latlng, {
     icon: losPointIcon,
@@ -4753,10 +4768,13 @@ function createLosPointMarker(latlng, index) {
     if (typeof L !== 'undefined' && L.DomEvent) {
       L.DomEvent.stop(ev);
     }
+    setLosSelectedPoint(index);
+    setLosStatus(`LOS: selected point ${index === 0 ? 'A' : 'B'} (click map to move or drag point)`);
   });
   marker.on('dragstart', () => {
     const el = marker.getElement();
     if (el) el.classList.add('dragging');
+    setLosSelectedPoint(index);
     losDragging = true;
     clearLosProfileHover();
   });
@@ -4773,6 +4791,7 @@ function createLosPointMarker(latlng, index) {
     losDragging = false;
     scheduleLosCheck(true, { allowNetwork: true, forceNetwork: true });
   });
+  marker.on('add', () => setLosSelectedPoint(losSelectedPointIndex));
   return marker;
 }
 
@@ -4784,6 +4803,7 @@ function handleLosPoint(latlng) {
   losPoints.push(latlng);
   const marker = createLosPointMarker(latlng, losPoints.length - 1);
   losPointMarkers.push(marker);
+  setLosSelectedPoint(losPoints.length - 1);
 
   if (losPoints.length === 1) {
     setLosStatus('LOS: select second point');
@@ -5196,6 +5216,15 @@ map.on('click', (ev) => {
     return;
   }
   if (losActive) {
+    if (losLocked && losSelectedPointIndex != null) {
+      const idx = losSelectedPointIndex;
+      if (losPointMarkers[idx]) {
+        losPointMarkers[idx].setLatLng(ev.latlng);
+      }
+      updateLosPointPosition(idx, ev.latlng);
+      scheduleLosCheck(true, { allowNetwork: true, forceNetwork: true });
+      return;
+    }
     handleLosPoint(ev.latlng);
     return;
   }
