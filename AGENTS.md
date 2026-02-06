@@ -1,6 +1,6 @@
 # Repository Guidelines
 
-Current version: `1.3.1` (see `VERSIONS.md`).
+Current version: `1.3.5` (see `VERSIONS.md`).
 
 ## Project Structure & Module Organization
 - `backend/app.py` wires FastAPI routes, MQTT lifecycle, and websocket broadcast flow.
@@ -17,7 +17,7 @@ Current version: `1.3.1` (see `VERSIONS.md`).
 - `docker-compose.yaml` runs the service as `meshmap-live`.
 - `data/` stores persisted state (`state.json`), route history (`route_history.jsonl`), role overrides (`device_roles.json`), and optional neighbor overrides (`neighbor_overrides.json`).
 - `.env` holds dev runtime settings; `.env.example` mirrors template defaults.
-- `VERSION.txt` tracks the current version (now `1.3.1`); append changes in `VERSIONS.md`.
+- `VERSION.txt` tracks the current version (now `1.3.5`); append changes in `VERSIONS.md`.
 
 ## Build, Test, and Development Commands
 - `docker compose up -d --build` rebuilds and restarts the backend (preferred workflow).
@@ -45,7 +45,7 @@ Current version: `1.3.1` (see `VERSIONS.md`).
 
 ## Configuration & Operations
 - Most behavior is controlled by `.env` (MQTT host, TLS, topics, TTLs, map start lat/lon/zoom, MQTT online window, default map layer).
-- Current dev defaults: `DEVICE_TTL_SECONDS=259200`, `MQTT_ONLINE_SECONDS=600`, `ROUTE_TTL_SECONDS=60`, `TRAIL_LEN=0`, `DISTANCE_UNITS=km`.
+- Current dev defaults: `DEVICE_TTL_HOURS=96`, `PATH_TTL_SECONDS=172800`, `MQTT_ONLINE_SECONDS=600`, `ROUTE_TTL_SECONDS=60`, `TRAIL_LEN=0`, `DISTANCE_UNITS=mi`.
 - Node size default is `NODE_MARKER_RADIUS` (pixels); users can override via the HUD slider.
 - History link size default is `HISTORY_LINK_SCALE`; users can override via the History panel slider.
 - Map radius filter: `MAP_RADIUS_KM=0` disables filtering; `.env.example` uses `241.4` km (150mi). Applies to nodes, trails, routes, and history edges.
