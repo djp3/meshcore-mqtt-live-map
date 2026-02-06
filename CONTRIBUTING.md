@@ -39,6 +39,7 @@ Thanks for helping improve the MeshCore Live Map. This repo is intentionally lig
 - Preview check: `/preview.png?lat=...&lon=...&zoom=...` shows tiles + device dots.
 - Routing controls: `ROUTE_MAX_HOP_DISTANCE` (km) and `ROUTE_INFRA_ONLY` (repeaters/rooms only).
 - Staleness controls: `DEVICE_TTL_HOURS` (device/adverts) and `PATH_TTL_SECONDS` (path activity).
+- Coordinate overrides: `DEVICE_COORDS_FILE` (default `/data/device_coords.json`).
 - Neighbor overrides: `NEIGHBOR_OVERRIDES_FILE` can force adjacency pairs for hash collisions.
 
 ## UI Changes

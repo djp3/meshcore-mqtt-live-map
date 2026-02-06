@@ -117,6 +117,12 @@ MQTT_TLS=true
 MQTT_TOPIC=meshcore/#
 ```
 
+Optional coordinate overrides (for fixed node placement):
+
+```env
+DEVICE_COORDS_FILE=/data/device_coords.json
+```
+
 Optional: enable the coverage layer by setting `COVERAGE_API_URL` (the Coverage button hides itself when blank):
 
 ```env

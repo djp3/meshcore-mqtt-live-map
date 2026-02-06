@@ -106,7 +106,7 @@ Loads all settings from environment variables with sensible defaults.
 
 **Key configuration groups:**
 - MQTT connection (`MQTT_HOST`, `MQTT_PORT`, `MQTT_TLS`, etc.)
-- State persistence (`STATE_DIR`, `STATE_SAVE_INTERVAL`)
+- State persistence (`STATE_DIR`, `STATE_SAVE_INTERVAL`, `DEVICE_COORDS_FILE`)
 - Neighbor overrides (`NEIGHBOR_OVERRIDES_FILE`)
 - Device/path staleness (`DEVICE_TTL_HOURS`, `PATH_TTL_SECONDS`, `TRAIL_LEN`)
 - Route handling (`ROUTE_TTL_SECONDS`, `ROUTE_HISTORY_HOURS`)

@@ -52,6 +52,7 @@ Current version: `1.3.5` (see `VERSIONS.md`).
 - `MAP_RADIUS_SHOW=true` draws a debug circle centered on `MAP_START_LAT/LON`.
 - Set `TRAIL_LEN=0` to disable trails entirely; the HUD trail hint is removed when trails are off.
 - Coverage button only appears when `COVERAGE_API_URL` is set.
+- `DEVICE_COORDS_FILE` points to optional coordinate overrides (default `/data/device_coords.json`).
 - `NEIGHBOR_OVERRIDES_FILE` can point at a JSON map/list of neighbor pairs to resolve hash collisions.
 - Optional custom HUD link appears when `CUSTOM_LINK_URL` is set.
 - Update banner uses `GIT_CHECK_ENABLED` (compare local vs upstream) with `GIT_CHECK_PATH` pointing at a git repo.
